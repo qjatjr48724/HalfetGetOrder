@@ -425,7 +425,7 @@ sheet2 = wb2.active
 sheet2.title = "주문내역"
 
 # 헤더 행 (플랫폼 포함)
-header_cols = ['플랫폼', '주문일시', '상품결제금액', '수취인 이름', '상품명 + 옵션명', '수량', '수취인 전화번호', '등록옵션명']
+header_cols = ['플랫폼', '주문일시', '총 상품결제금액', '수취인 이름', '상품명 + 옵션명', '수량', '수취인 전화번호', '등록옵션명']
 sheet2.append(header_cols)
 
 # 스타일
@@ -625,7 +625,7 @@ try:
             if not display_name and add_no:
                 display_name = f"추가상품({add_no})"
             if display_name:
-                add_display_rows.append(f"+ {display_name} x{add_qty}")
+                add_display_rows.append(f"+ {display_name}")
 
         # 총액 보정 + 추가옵션 금액 합산
         if total_price <= 0:
@@ -647,7 +647,7 @@ try:
 
         # 하위행(추가옵션들)
         for text in add_display_rows:
-            sheet2.append(["", "", "", "", text, "", "", ""])
+            sheet2.append(["", "", "", "", text, add_qty, "", ""])
             current_row += 1
 
         # 블록 테두리 + 수취인 이름 병합 + 마지막행 두꺼운 하단선
@@ -663,7 +663,7 @@ except Exception as e:
 min_widths = {
     '플랫폼': 8,
     '주문일시': 16,
-    '상품결제금액': 12,
+    '상품결제금액': 14,
     '수취인 이름': 20,
     '상품명 + 옵션명': 32,
     '수량': 10,
@@ -690,9 +690,9 @@ for col in sheet2.columns:
         if header == '등록옵션명':
             cell.number_format = '@'
 
-    auto_width = int(max_len * 0.6) + 6
+    auto_width = int(max_len * 0.5)
     if header == '등록옵션명':
-        auto_width = int(max_len * 0.6) + 8
+        auto_width = int(max_len * 0.5) + 4
     target_width = max(auto_width, min_widths.get(header, 12))
     sheet2.column_dimensions[col_letter].width = target_width
 
@@ -700,8 +700,11 @@ for col in sheet2.columns:
 #      ※ 쿠팡/고도몰 구분 없이 시트 전체 데이터 행에 적용
 for r in range(2, sheet2.max_row + 1):
     prod_cell = sheet2.cell(row=r, column=5)  # '상품명 + 옵션명'
+    pclen = visual_len(prod_cell.value)
+    if pclen > 40:
+        sheet2.row_dimensions[r].height = 34
     if not (prod_cell.alignment and prod_cell.alignment.wrap_text):
-        sheet2.row_dimensions[r].height = 26
+        sheet2.row_dimensions[r].height = 24
 
 # 저장(덮어쓰기)
 if os.path.exists(ORDER_XLSX):
