@@ -544,9 +544,8 @@ if coupang_body:
         print("⚠️ 쿠팡 JSON 파싱 오류:", e)
 
 
-# ========== 2-2) 고도몰 → 세트 표시(본상품 + 그 본상품의 추가옵션들: parentGoodsNo 매칭) ==========
+# ========== 2-2) 고도몰 → 세트(본상품 + 그 본상품의 추가옵션들) ==========
 platform_name = "고도몰"
-
 try:
     root = godo_json.get('data', {}) if isinstance(godo_json, dict) else {}
     ret = root.get('return', {}) or {}
@@ -567,24 +566,20 @@ try:
         parents = _as_list(od.get('orderGoodsData'))
         adds    = _as_list(od.get('addGoodsData') or od.get('orderAddGoodsData'))
 
-        # Map parents by goodsNo (string)
         parent_index = {}
         for idx, og in enumerate(parents):
-            gno = str(og.get('goodsNo') or "").strip()
+            gno = str(og.get('goodsNo') or '').strip()
             if gno:
                 parent_index[gno] = idx
 
-        # Group add options by parentGoodsNo (strict)
-        adds_by_parent_idx = {i: [] for i in range(len(parents))}
+        adds_by_parent = {i: [] for i in range(len(parents))}
         for add in adds:
-            pno = str(add.get('parentGoodsNo') or "").strip()
+            pno = str(add.get('parentGoodsNo') or '').strip()
             if pno and pno in parent_index:
-                adds_by_parent_idx[parent_index[pno]].append(add)
+                adds_by_parent[parent_index[pno]].append(add)
             else:
-                # 요청: 미지정 옵션은 출력하지 않음
-                pass
+                pass  # 미지정 옵션은 출력하지 않음
 
-        # Output sets: [parent] then its add options
         first_parent = True
         for i, og in enumerate(parents):
             goodsCd  = (og.get('goodsCd') or '').strip()
@@ -593,16 +588,15 @@ try:
             qty      = _to_int(og.get('goodsCnt', 1), 1)
             price    = _to_float(og.get('goodsPrice', 0.0), 0.0)
 
-            # total = parent + its adds
-            total_price = price * (qty or 1)
-            for add in adds_by_parent_idx.get(i, []):
-                add_qty  = _to_int(add.get('goodsCnt', 1), 1)
-                add_price = _to_float(add.get('goodsPrice', 0.0), 0.0)
-                total_price += add_price * add_qty
-
-            total_price_str = f"{_to_int(total_price):,}원"
             product_info_parent = f"{goodsCd} / {opt_text}" if opt_text else (goodsNm or goodsCd)
             reg_option_value = goodsCd
+
+            set_total = price * (qty or 1)
+            for add in adds_by_parent.get(i, []):
+                add_qty   = _to_int(add.get('goodsCnt', 1), 1)
+                add_price = _to_float(add.get('goodsPrice', 0.0), 0.0)
+                set_total += add_price * add_qty
+            total_price_str = f"{_to_int(set_total):,}원"
 
             sheet2.append([
                 platform_name,
@@ -617,8 +611,8 @@ try:
             current_row += 1
             first_parent = False
 
-            for add in adds_by_parent_idx.get(i, []):
-                add_name = (add.get('goodsNm') or add.get('goodsNmStandard') or "").strip()
+            for add in adds_by_parent.get(i, []):
+                add_name = (add.get('goodsNm') or add.get('goodsNmStandard') or '').strip()
                 add_qty  = _to_int(add.get('goodsCnt', 1), 1)
                 sheet2.append(["", "", "", "", f"+ {add_name}", add_qty, "", ""])
                 current_row += 1
@@ -630,14 +624,14 @@ try:
             apply_thick_bottom(sheet2, block_start, block_end, 1, 8)
 
 except Exception as e:
-    print("⚠️ 고도몰 XML 파싱 오류(parentGoodsNo 매칭):", e)
+    print("⚠️ 고도몰 XML 파싱 오류(parentGoodsNo 세트 출력):", e)
 # 2-마지막) 시트 서식(가운데 정렬 + 열 너비 자동 + 행 높이)
 min_widths = {
     '플랫폼': 8,
     '주문일시': 16,
     '상품결제금액': 14,
     '수취인 이름': 20,
-    '상품명 + 옵션명': 32,
+    '상품명 + 옵션명': 50,
     '수량': 10,
     '수취인 전화번호': 16,
     '등록옵션명': 50,
@@ -654,7 +648,7 @@ for col in sheet2.columns:
         if vlen > max_len:
             max_len = vlen
         # 기본: 가운데 정렬
-        if header == '상품명 + 옵션명' and vlen > 40:
+        if header == '상품명 + 옵션명' and vlen > 50:
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         else:
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)

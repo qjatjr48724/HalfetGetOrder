@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 import xmltodict
-# from keys import partner_key, godo_key, cp_accesskey, cp_secretkey
+from keys import partner_key, godo_key, cp_accesskey, cp_secretkey
 
 # ─────────────────────────────────────────────────────────
 # 공통 사용 변수
@@ -30,16 +30,6 @@ created_from = str(date.today() - timedelta(days=7))
 created_to   = str(date.today())
 print("조회기간:", created_from, "~", created_to)
 
-# ─────────────────────────────────────────────────────────
-# API 키/기본 설정
-# ─────────────────────────────────────────────────────────
-# 쿠팡 API KEY
-cp_accesskey = "7b6058d9-7745-4cf8-9881-cf4a469c0512"
-cp_secretkey = "a4e91ae56e91a47b696712dd29008a405e8d4c25"
-
-# 고도몰 API KEY
-partner_key = "MCVFRCVENSVCNiUyOCUxMSVEQ28="
-godo_key = "JTBBJUNFJTQwZCUxMiVCOCUzQSVBRCVDQW0lRjMlODclRjUlQUElQjIlQ0QlRUYlMDMlQkUlQzklREIlOTh6bU0lMTElNUIlREElM0I0JTFCJUZCcCUxMyVFRCU0MCU3RTUlMUYlRjk="
 
 # ─────────────────────────────────────────────────────────
 # 추가옵션 캐시 설정
@@ -50,7 +40,7 @@ REFRESH_ADD_GOODS = False  # 새 옵션 갱신 시 True로 1회 실행
 # ─────────────────────────────────────────────────────────
 # 경로(엑셀 저장 위치)
 # ─────────────────────────────────────────────────────────
-BASE_DIR = r"C:/Users/UserK/Desktop/[작업물]/[판매] 주문수집 프로그램"
+BASE_DIR = r"C:/Users/UserK/Desktop/"
 os.makedirs(BASE_DIR, exist_ok=True)
 today_date = date.today().strftime('%Y%m%d')
 WAYBILL_XLSX = os.path.join(BASE_DIR, f"대한통운 송장등록_{today_date}.xlsx")
@@ -543,7 +533,8 @@ if coupang_body:
     except Exception as e:
         print("⚠️ 쿠팡 JSON 파싱 오류:", e)
 
-# ========== 2-2) 고도몰 → 블록(부모행 + 하위행) ==========
+
+# ========== 2-2) 고도몰 → 세트(본상품 + 그 본상품의 추가옵션들) ==========
 platform_name = "고도몰"
 try:
     root = godo_json.get('data', {}) if isinstance(godo_json, dict) else {}
@@ -554,118 +545,83 @@ try:
         block_start = current_row
 
         ordered_at = _fmt_dt(od.get('orderDate', ''))
-
         info = od.get('orderInfoData') or {}
         receiver_name = (info.get('receiverName') or "").strip()
-
         safe_fl = str(info.get('receiverUseSafeNumberFl') or '').strip().lower() == 'y'
         safe_no = (info.get('receiverSafeNumber') or '').strip()
         phone = safe_no if (safe_fl and safe_no) else (
             (info.get('receiverPhone') or info.get('receiverCellPhone') or '').strip()
         )
 
-        # 본상품(부모행 정보)
-        parent_lines = []   # "goodsCd / opt_text"
-        goods_cd_list = []  # 등록옵션명 칼럼용
-        total_qty = 0
-        total_price = 0.0
+        parents = _as_list(od.get('orderGoodsData'))
+        adds    = _as_list(od.get('addGoodsData') or od.get('orderAddGoodsData'))
 
-        for og in _as_list(od.get('orderGoodsData')):
+        parent_index = {}
+        for idx, og in enumerate(parents):
+            gno = str(og.get('goodsNo') or '').strip()
+            if gno:
+                parent_index[gno] = idx
+
+        adds_by_parent = {i: [] for i in range(len(parents))}
+        for add in adds:
+            pno = str(add.get('parentGoodsNo') or '').strip()
+            if pno and pno in parent_index:
+                adds_by_parent[parent_index[pno]].append(add)
+            else:
+                pass  # 미지정 옵션은 출력하지 않음
+
+        first_parent = True
+        for i, og in enumerate(parents):
             goodsCd  = (og.get('goodsCd') or '').strip()
             goodsNm  = (og.get('goodsNm') or og.get('goodsNmStandard') or '').strip()
             opt_text = (og.get('optionTextInfo') or '').strip()
             qty      = _to_int(og.get('goodsCnt', 1), 1)
             price    = _to_float(og.get('goodsPrice', 0.0), 0.0)
 
-            total_qty   += qty
-            total_price += price * qty
-            if goodsCd:
-                goods_cd_list.append(goodsCd)
+            product_info_parent = f"{goodsCd} / {opt_text}" if opt_text else (goodsNm or goodsCd)
+            reg_option_value = goodsCd
 
-            parent_lines.append(f"{goodsCd} / {opt_text}" if opt_text else (goodsNm or goodsCd))
+            set_total = price * (qty or 1)
+            for add in adds_by_parent.get(i, []):
+                add_qty   = _to_int(add.get('goodsCnt', 1), 1)
+                add_price = _to_float(add.get('goodsPrice', 0.0), 0.0)
+                set_total += add_price * add_qty
+            total_price_str = f"{_to_int(set_total):,}원"
 
-        # 추가옵션(하위행 + 금액 합산)
-        add_price_sum = 0.0
-        add_display_rows = []  # “+ 옵션명 x수량”
-
-        add_containers = []
-        for key in ("orderAddGoodsData", "addGoodsData", "order_add_goods_data", "order_add_goods"):
-            val = od.get(key)
-            if val is not None:
-                add_containers.append(val)
-
-        add_items_all = []
-        for cont in add_containers:
-            items = _as_list(cont)
-            if items and isinstance(items[0], dict) and any(sk in items[0] for sk in ("item", "row", "goods")):
-                tmp = []
-                for it in items:
-                    for sk in ("item", "row", "goods"):
-                        if it.get(sk) is not None:
-                            tmp.extend(_as_list(it.get(sk)))
-                if tmp:
-                    items = tmp
-            add_items_all.extend(items)
-
-        for add in _as_list(add_items_all):
-            add_no   = (add.get("addGoodsNo") or add.get("add_goods_no") or add.get("goodsNo") or "").strip()
-            add_qty  = _to_int(add.get("goodsCnt", add.get("addGoodsCnt", 1)), 1)
-            add_line_price = _to_float(add.get("goodsPrice", add.get("addGoodsPrice", 0.0)), 0.0)
-
-            add_nm = ""
-            add_def_price = 0.0
-            if add_no and add_no in add_goods_map:
-                add_nm = add_goods_map[add_no]["goodsNm"]
-                add_def_price = float(add_goods_map[add_no]["goodsPrice"] or 0.0)
-
-            use_price = add_line_price if add_line_price > 0 else add_def_price
-            add_price_sum += use_price * add_qty
-
-            display_name = add_nm or (add.get("goodsNm") or add.get("goodsNmStandard") or "").strip()
-            if not display_name and add_no:
-                display_name = f"추가상품({add_no})"
-            if display_name:
-                add_display_rows.append(f"+ {display_name}")
-
-        # 총액 보정 + 추가옵션 금액 합산
-        if total_price <= 0:
-            settle = _to_float(od.get('settlePrice', 0.0), 0.0)
-            total_goods_price = _to_float(od.get('totalGoodsPrice', 0.0), 0.0)
-            total_price = settle or total_goods_price
-        total_price += add_price_sum
-
-        total_price_str = f"{_to_int(total_price):,}원"
-        product_info_parent = " / ".join([x for x in parent_lines if x]) or "(본상품 없음)"
-        reg_option_value = ", ".join([gc for gc in goods_cd_list if gc])  # 등록옵션명(=goodsCd)
-
-        # 부모행
-        sheet2.append([
-            platform_name, ordered_at, total_price_str, receiver_name,
-            product_info_parent, (total_qty or 1), phone, reg_option_value
-        ])
-        current_row += 1
-
-        # 하위행(추가옵션들)
-        for text in add_display_rows:
-            sheet2.append(["", "", "", "", text, add_qty, "", ""])
+            sheet2.append([
+                platform_name,
+                ordered_at if first_parent else "",
+                total_price_str,
+                receiver_name if first_parent else "",
+                product_info_parent,
+                (qty or 1),
+                phone if first_parent else "",
+                reg_option_value
+            ])
             current_row += 1
+            first_parent = False
 
-        # 블록 테두리 + 수취인 이름 병합 + 마지막행 두꺼운 하단선
+            for add in adds_by_parent.get(i, []):
+                add_name = (add.get('goodsNm') or add.get('goodsNmStandard') or '').strip()
+                add_qty  = _to_int(add.get('goodsCnt', 1), 1)
+                sheet2.append(["", "", "", "", f"+ {add_name}", add_qty, "", ""])
+                current_row += 1
+
         block_end = current_row - 1
-        apply_border_block(sheet2, block_start, block_end, 1, 8)  # H열 포함
-        merge_receiver_name(sheet2, block_start, block_end)
-        apply_thick_bottom(sheet2, block_start, block_end, 1, 8)
+        if block_end >= block_start:
+            apply_border_block(sheet2, block_start, block_end, 1, 8)
+            merge_receiver_name(sheet2, block_start, block_end)
+            apply_thick_bottom(sheet2, block_start, block_end, 1, 8)
 
 except Exception as e:
-    print("⚠️ 고도몰 XML 파싱 오류(옵션 하위행):", e)
-
+    print("⚠️ 고도몰 XML 파싱 오류(parentGoodsNo 세트 출력):", e)
 # 2-마지막) 시트 서식(가운데 정렬 + 열 너비 자동 + 행 높이)
 min_widths = {
     '플랫폼': 8,
     '주문일시': 16,
     '상품결제금액': 14,
     '수취인 이름': 20,
-    '상품명 + 옵션명': 32,
+    '상품명 + 옵션명': 50,
     '수량': 10,
     '수취인 전화번호': 16,
     '등록옵션명': 50,
@@ -682,7 +638,7 @@ for col in sheet2.columns:
         if vlen > max_len:
             max_len = vlen
         # 기본: 가운데 정렬
-        if header == '상품명 + 옵션명' and vlen > 40:
+        if header == '상품명 + 옵션명' and vlen > 50:
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
         else:
             cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
