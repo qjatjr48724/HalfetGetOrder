@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 import xmltodict
-from keys import partner_key, godo_key, cp_accesskey, cp_secretkey
+from HalfetGetOrder.src.HalfetGetOrder.keys import partner_key, godo_key, cp_accesskey, cp_secretkey
 
 # ─────────────────────────────────────────────────────────
 # 공통 사용 변수
