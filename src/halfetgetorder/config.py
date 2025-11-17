@@ -40,8 +40,9 @@ def resource_path(rel: str) -> str:
     return str(base / rel)
 
 def app_data_dir() -> str:
-    root = _project_root()
-    data = root / "data"
+    home = Path.home()
+    desktop = home / "Desktop"
+    data = desktop / "data"
     data.mkdir(parents=True, exist_ok=True)
     return str(data)
 

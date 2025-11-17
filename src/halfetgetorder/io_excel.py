@@ -6,7 +6,7 @@ from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 
 from .utils import visual_len, _to_int, _to_float
-from .utils import _fmt_dt
+from .utils import _fmt_dt, get_box_count_from_items
 
 header_fill = PatternFill(start_color="D8E4BC", end_color="D8E4BC", fill_type="solid")
 center = Alignment(horizontal='center', vertical='center', wrap_text=False)
@@ -56,7 +56,7 @@ def finalize_orders_sheet(ws):
         '주문일시': 16,
         '총 상품결제금액': 14,
         '수취인 이름': 20,
-        '상품명 + 옵션명': 50,
+        '상품명 + 옵션명': 70,
         '수량': 10,
         '수취인 전화번호': 16,
         '등록옵션명': 50,
@@ -205,3 +205,87 @@ def append_godo_sets(ws, grouped_orders):
         apply_border_block(ws, block_start, current_row - 1, 1, 8)
         merge_receiver_name(ws, block_start, current_row - 1)
         apply_thick_bottom(ws, block_start, current_row - 1, 1, 8)
+
+
+def create_waybill_workbook(coupang_orders):
+    """
+    대한통운 송장등록용 엑셀 워크북 생성.
+    - 시트명: '판매 주문수집'
+    - 열 구조: 기존 단일 파일 버전의 first_col1 과 동일
+    - coupang_orders: coupang.normalize_coupang_orders(...) 결과 리스트
+    """
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "판매 주문수집"
+
+    # 대한통운 양식 헤더 (참고용 파일 first_col1 그대로)
+    header = [
+        '예약구분', '집하예정일', '받는분성명', '받는분전화번호', '받는분기타연락처',
+        '받는분우편번호', '받는분주소(전체, 분할)', '운송장번호', '고객주문번호',
+        '품목명', '박스수량', '박스타입', '기본운임', '배송메세지1',
+        '배송메세지2', '품목명', '운임구분'
+    ]
+    ws.append(header)
+
+    # 헤더 스타일 (기존 주문수집 시트와 동일 톤)
+    header_font = Font(bold=True)
+    header_align = Alignment(horizontal="center", vertical="center")
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = header_align
+
+    # 데이터 행 작성 (쿠팡 주문만 사용)
+    today_str = date.today().strftime('%Y%m%d')
+
+    for od in coupang_orders:
+        name = od.get("name", "")
+        phone = od.get("phone", "")
+        addr1 = od.get("addr1", "")
+        addr2 = od.get("addr2", "")
+        zipcode = od.get("zipcode", "")
+        address = f"{addr1} {addr2}".strip()
+
+        # 박스수량: 기존 로직 (3대까지 1박스, 이후 4대마다 1박스 추가)
+        box_cnt = get_box_count_from_items(od.get("items", []))
+
+        # 배송메세지2 에 플랫폼명(쿠팡) 기입 (참고용 스크립트와 동일 로직)
+        platform_name = "쿠팡"
+
+        row = [
+            "일반",            # 예약구분
+            today_str,        # 집하예정일 (YYYYMMDD)
+            name,             # 받는분성명
+            phone,            # 받는분전화번호
+            "",               # 받는분기타연락처
+            zipcode,          # 받는분우편번호
+            address,          # 받는분주소(전체, 분할)
+            "",               # 운송장번호
+            "",               # 고객주문번호
+            "",               # 품목명
+            box_cnt,          # 박스수량
+            "",               # 박스타입
+            "",               # 기본운임
+            "",               # 배송메세지1
+            platform_name,    # 배송메세지2 (플랫폼명)
+            "",               # 품목명 (두 번째)
+            ""                # 운임구분
+        ]
+        ws.append(row)
+
+    # 전체 가운데 정렬 + 열 너비 자동 조정 (참고용 파일 스타일 그대로)
+    center_align = Alignment(horizontal="center", vertical="center")
+    for row in ws.iter_rows():
+        for cell in row:
+            cell.alignment = center_align
+
+    for column_cells in ws.columns:
+        max_len = 0
+        col_letter = column_cells[0].column_letter
+        for cell in column_cells:
+            val = str(cell.value) if cell.value is not None else ""
+            if len(val) > max_len:
+                max_len = len(val)
+        ws.column_dimensions[col_letter].width = max_len * 1.3 + 2
+
+    return wb, ws

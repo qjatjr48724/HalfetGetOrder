@@ -1,10 +1,12 @@
 
-import hmac, hashlib, urllib.parse, urllib.request, ssl, json, time
+import hmac, hashlib, urllib.parse, urllib.request, urllib.error, ssl, json, time, os
 from datetime import date, datetime, timedelta
 from .config import CP_ACCESS, CP_SECRET
 
+os.environ['TZ'] = 'GMT+0'
 CONTENT_TYPE = "application/json;charset=UTF-8"
 METHOD = "GET"
+DOMAIN = "https://api-gateway.coupang.com"
 VENDOR_ID = "A01093941"
 
 def fetch_orders(created_from=None, created_to=None):
@@ -23,22 +25,56 @@ def fetch_orders(created_from=None, created_to=None):
     authorization = (
         f"CEA algorithm=HmacSHA256, access-key={CP_ACCESS}, signed-date={datetime_signed}, signature={signature}"
     )
-    cp_url = f"https://api-gateway.coupang.com{cp_path}?{cp_query}"
+    cp_url = f"{DOMAIN}{cp_path}?{cp_query}"
     req = urllib.request.Request(cp_url)
     req.add_header("Content-type", CONTENT_TYPE)
     req.add_header("Authorization", authorization)
+
+    # ✅ 쿠팡 권장 헤더 추가
+    req.add_header("X-Requested-By", VENDOR_ID)
+    req.add_header("X-EXTENDED-TIMEOUT", "90000")  # 10,000ms = 10초
+
     req.get_method = lambda: METHOD
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
 
+    # print("CP_ACCESS = " + CP_ACCESS)
+    # print("CP_SECRET = " + CP_SECRET)
+
+    # print("created_from = " + created_from)
+    # print("created_to = " + created_to)
+    # print("signature = " + signature)
+    # print("authorization = " + authorization)
+    # print("message = " + message)
+    # print("cp_url = " + cp_url)
+
+    DEFAULT_TIMEOUT = 90
     try:
-        resp = urllib.request.urlopen(req, context=ctx)
+        resp = urllib.request.urlopen(req, context=ctx, timeout=DEFAULT_TIMEOUT)
         return resp.read().decode(resp.headers.get_content_charset() or "utf-8")
-    except Exception as e:
-        print("쿠팡 API 호출 오류:", e)
+    except urllib.error.HTTPError as e:
+        # 쿠팡이 내려주는 에러 본문까지 같이 출력
+        try:
+            err_body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            err_body = "<본문 읽기 실패>"
+        print("❌ 쿠팡 API HTTP 오류:")
+        print("   - 상태코드:", e.code)
+        print("   - 사유:", e.reason)
+        print("   - 응답본문:", err_body)
         return ""
+
+    except urllib.error.URLError as e:
+        print("❌ 쿠팡 API 네트워크 오류:", e.reason)
+        return ""
+
+    except Exception as e:
+        print("❌ 쿠팡 API 일반 오류:", repr(e))
+        return ""
+
+    
 
 def normalize_coupang_orders(coupang_body):
     try:
