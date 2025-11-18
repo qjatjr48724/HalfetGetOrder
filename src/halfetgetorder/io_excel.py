@@ -108,11 +108,11 @@ def finalize_orders_sheet(ws):
 
         rd = ws.row_dimensions[r]
 
-        # 🔴 이미 다른 데서 높이를 지정한 행(예: 부모행 height=55)은 건드리지 않는다
+        # 이미 다른 데서 높이를 지정한 행(예: 부모행 height=65)은 건드리지 않는다
         if rd.height is not None:
             continue
 
-        # ⬇️ 높이가 아직 없는 행만 기본 규칙 적용
+        # 높이가 아직 없는 행만 기본 규칙 적용
         if pclen > 40:
             rd.height = 34
         else:
@@ -165,15 +165,26 @@ def append_coupang_block(ws, coupang_orders):
                 option_names.append(str(option_name))
         option_name_str = ", ".join(option_names)
 
+        # 🔹 쿠팡 배송메세지: parcelPrintMessage
+        coupang_memo = od.get('parcelPrintMessage', '') or ''
+
         ws.append([
-            "쿠팡", ordered_at, total_price_str, receiver_name,
-            product_info, total_qty, phone, option_name_str
+            "쿠팡",
+            ordered_at,
+            total_price_str,
+            receiver_name,
+            product_info,
+            total_qty,
+            phone,
+            option_name_str,
+            coupang_memo,   # ← 9번째 열: 배송메세지
         ])
         current_row += 1
 
-        apply_border_block(ws, block_start, current_row - 1, 1, 8)
+        # 🔹 border/굵은 라인 범위도 1~9열로 확장
+        apply_border_block(ws, block_start, current_row - 1, 1, 9)
         merge_receiver_name(ws, block_start, current_row - 1)
-        apply_thick_bottom(ws, block_start, current_row - 1, 1, 8)
+        apply_thick_bottom(ws, block_start, current_row - 1, 1, 9)
 
 
 def append_godo_sets(ws, grouped_orders):
@@ -199,9 +210,7 @@ def append_godo_sets(ws, grouped_orders):
             qty      = _to_int(p.get('goodsCnt', 1), 1)
             price    = _to_float(p.get('goodsPrice', 0.0), 0.0)
 
-            # ▶ 상품명 + 옵션명(부모셀) 구성 로직 수정
-            #   - 1줄: 상품명(goodsNm, 없으면 goodsCd)
-            #   - 2줄: orderoptionInfo (없으면 optionInfo 사용 시도)
+            # ▶ 상품명 + 옵션명(부모셀) 구성 로직
             product_name = goodsNm or goodsCd
 
             # 1) 먼저 orderoptionInfo / orderOptionInfo 에 사람이 읽기 좋게 들어있는지 확인
@@ -215,19 +224,15 @@ def append_godo_sets(ws, grouped_orders):
                         opt_list = json.loads(raw_opt)  # [[옵션명, 옵션값, ...], [...], ...]
                         parts = []
                         for opt in opt_list:
-                            # 최소한 0: 옵션명, 1: 옵션값
                             if isinstance(opt, (list, tuple)) and len(opt) >= 2:
                                 name = str(opt[0]).strip()
                                 val = str(opt[1]).strip()
                                 if name and val:
-                                    # "(필수선택) 제품등급: S급 외관 / S급 배터리"
                                     parts.append(f"{name}: {val}")
                         option_info = "\n".join(parts)
                     except Exception:
-                        # JSON 파싱 실패하면 그냥 원본을 버리거나(raw_opt) 그대로 쓰고 싶으면 여기 선택
                         option_info = ""
 
-            # 3) 최종 부모 셀 텍스트 구성
             if option_info:
                 product_info_parent = f"{product_name}\n{option_info}"
             else:
@@ -253,7 +258,7 @@ def append_godo_sets(ws, grouped_orders):
                 (qty or 1),
                 grp["receiver"]["phone"] if first_parent else "",
                 reg_option_value,
-                order_memo if first_parent else ""   # ← 새로 추가된 열
+                order_memo if first_parent else ""
             ])
             current_row += 1
             first_parent = False
@@ -262,26 +267,23 @@ def append_godo_sets(ws, grouped_orders):
             prow = current_row - 1
             pcell = ws.cell(row=prow, column=5)
 
-            # RichText 지원되면: 상품명/옵션에 서로 다른 스타일 적용
             if option_info and RICH_TEXT_AVAILABLE:
                 pcell.value = CellRichText(
                     TextBlock(
                         text=product_name,
                         font=InlineFont(
-                            b=True   # bold=True가 아니라 b=True
+                            b=True
                         )
                     ),
                     TextBlock(
                         text="\n" + option_info,
                         font=InlineFont(
-                            i=True,               # italic
-                            color="00666666"      # 회색 계열
+                            i=True,
+                            color="00666666"
                         )
                     ),
                 )
             else:
-                # 지원 안 되면: 전체 문자열 그대로, 폰트만 볼드
-                # (ws.append 에 이미 product_info_parent 가 들어가 있음)
                 pcell.value = product_info_parent
                 pcell.font = Font(bold=True)
 
@@ -294,7 +296,7 @@ def append_godo_sets(ws, grouped_orders):
             for add in s["children"]:
                 add_name = (add.get('goodsNm') or add.get('goodsNmStandard') or '').strip()
                 add_qty  = _to_int(add.get('goodsCnt', 1), 1)
-                ws.append(["", "", "", "", f"+ {add_name}", add_qty, "", ""])
+                ws.append(["", "", "", "", f"+ {add_name}", add_qty, "", "", ""])
                 current_row += 1
                 crow = current_row - 1
                 ccell = ws.cell(row=crow, column=5)
@@ -317,7 +319,6 @@ def create_waybill_workbook(coupang_orders):
     ws = wb.active
     ws.title = "판매 주문수집"
     ws.sheet_view.zoomScale = 75
-    # 대한통운 양식 헤더 (참고용 파일 first_col1 그대로)
     header = [
         '예약구분', '집하예정일', '받는분성명', '받는분전화번호', '받는분기타연락처',
         '받는분우편번호', '받는분주소(전체, 분할)', '운송장번호', '고객주문번호',
@@ -326,7 +327,6 @@ def create_waybill_workbook(coupang_orders):
     ]
     ws.append(header)
 
-    # 헤더 스타일 (기존 주문수집 시트와 동일 톤)
     header_font = Font(bold=True)
     header_align = Alignment(horizontal="center", vertical="center")
     for cell in ws[1]:
@@ -334,7 +334,6 @@ def create_waybill_workbook(coupang_orders):
         cell.font = header_font
         cell.alignment = header_align
 
-    # 데이터 행 작성 (쿠팡 주문만 사용)
     today_str = date.today().strftime('%Y%m%d')
 
     for od in coupang_orders:
@@ -345,34 +344,31 @@ def create_waybill_workbook(coupang_orders):
         zipcode = od.get("zipcode", "")
         address = f"{addr1} {addr2}".strip()
 
-        # 박스수량: 기존 로직 (3대까지 1박스, 이후 4대마다 1박스 추가)
         box_cnt = get_box_count_from_items(od.get("items", []))
 
-        # 배송메세지2 에 플랫폼명(쿠팡) 기입 (참고용 스크립트와 동일 로직)
         platform_name = "쿠팡"
 
         row = [
-            "일반",            # 예약구분
-            today_str,        # 집하예정일 (YYYYMMDD)
-            name,             # 받는분성명
-            phone,            # 받는분전화번호
-            "",               # 받는분기타연락처
-            zipcode,          # 받는분우편번호
-            address,          # 받는분주소(전체, 분할)
-            "",               # 운송장번호
-            "",               # 고객주문번호
-            "",               # 품목명
-            box_cnt,          # 박스수량
-            "",               # 박스타입
-            "",               # 기본운임
-            "",               # 배송메세지1
-            platform_name,    # 배송메세지2 (플랫폼명)
-            "",               # 품목명 (두 번째)
-            ""                # 운임구분
+            "일반",
+            today_str,
+            name,
+            phone,
+            "",
+            zipcode,
+            address,
+            "",
+            "",
+            "",
+            box_cnt,
+            "",
+            "",
+            "",
+            platform_name,
+            "",
+            ""
         ]
         ws.append(row)
 
-    # 전체 가운데 정렬 + 열 너비 자동 조정 (참고용 파일 스타일 그대로)
     center_align = Alignment(horizontal="center", vertical="center")
     for row in ws.iter_rows():
         for cell in row:
@@ -388,4 +384,3 @@ def create_waybill_workbook(coupang_orders):
         ws.column_dimensions[col_letter].width = max_len * 1.3 + 2
 
     return wb, ws
-
