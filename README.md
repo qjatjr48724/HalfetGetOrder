@@ -49,3 +49,6 @@ HalfetGetOrder
    └─ makedict.py
 
 ```
+
+
+# pyinstaller --onefile --name HalfetGetOrder --icon=icon/app.ico entry.py
