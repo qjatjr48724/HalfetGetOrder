@@ -12,12 +12,19 @@ rmdir /s /q build 2>nul
 rmdir /s /q dist 2>nul
 del /q HalfetGetOrder.spec 2>nul
 
+REM 아이콘 경로 설정 (루트\icon\app.ico)
+set ICON_PATH=%~dp0icon\app.ico
+
+IF NOT EXIST "%ICON_PATH%" (
+    echo [ERROR] 아이콘 파일을 찾을 수 없습니다:
+    echo         "%ICON_PATH%"
+    echo.
+    pause
+    goto :EOF
+)
+
 REM PyInstaller 빌드
-pyinstaller ^
-  --onefile ^
-  --name HalfetGetOrder ^
-  --icon=icon/app.ico ^
-  entry.py
+pyinstaller --onefile --name HalfetGetOrder --icon="%ICON_PATH%" entry.py
 
 REM 가상환경 비활성화
 deactivate
