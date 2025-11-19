@@ -5,7 +5,7 @@ from datetime import date
 from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.cell.text import InlineFont
-
+from openpyxl.formatting.rule import FormulaRule
 from .utils import visual_len, _to_int, _to_float
 from .utils import _fmt_dt, get_box_count_from_items
 
@@ -28,20 +28,32 @@ def create_orders_sheet():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "주문내역"
-    headers = ['플랫폼', '주문일시', '총 상품결제금액', '수취인 이름', '상품명 + 옵션명', '수량', '수취인 전화번호', '등록옵션명', '배송메세지']
+    # C열(총 상품결제금액)과 D열(수취인 이름) 사이에 '체크' 열 추가
+    headers = [
+        '플랫폼',           # A
+        '주문일시',         # B
+        '총 상품결제금액',   # C
+        '체크',             # D (신규)
+        '수취인 이름',      # E
+        '상품명 + 옵션명',  # F
+        '수량',             # G
+        '수취인 전화번호',  # H
+        '등록옵션명',       # I
+        '배송메세지',       # J
+    ]
     ws.append(headers)
     for c in ws[1]:
         c.fill = header_fill
     return wb, ws
 
 
-def apply_border_block(ws, start_row, end_row, start_col=1, end_col=8):
+def apply_border_block(ws, start_row, end_row, start_col=1, end_col=10):
     for r in range(start_row, end_row+1):
         for c in range(start_col, end_col+1):
             ws.cell(row=r, column=c).border = Border(left=thin, right=thin, top=thin, bottom=thin)
 
 
-def apply_thick_bottom(ws, block_start, block_end, start_col=1, end_col=8):
+def apply_thick_bottom(ws, block_start, block_end, start_col=1, end_col=10):
     for c in range(start_col, end_col+1):
         cell = ws.cell(row=block_end, column=c)
         cell.border = Border(
@@ -50,7 +62,8 @@ def apply_thick_bottom(ws, block_start, block_end, start_col=1, end_col=8):
             top=cell.border.top or thin,
             bottom=thick
         )
-    top_left = ws.cell(row=block_start, column=4)
+    # 굵은 테두리 시작 기준 컬럼도 수취인 이름(E열=5번)로 변경
+    top_left = ws.cell(row=block_start, column=5)
     top_left.border = Border(
         left=top_left.border.left or thin,
         right=top_left.border.right or thin,
@@ -60,9 +73,10 @@ def apply_thick_bottom(ws, block_start, block_end, start_col=1, end_col=8):
 
 
 def merge_receiver_name(ws, start_row, end_row):
+    # 수취인 이름이 이제 5열(E)이므로 5번 컬럼 기준으로 병합
     if end_row > start_row:
-        ws.merge_cells(start_row=start_row, start_column=4, end_row=end_row, end_column=4)
-        ws.cell(row=start_row, column=4).alignment = Alignment(horizontal='center', vertical='center')
+        ws.merge_cells(start_row=start_row, start_column=5, end_row=end_row, end_column=5)
+        ws.cell(row=start_row, column=5).alignment = Alignment(horizontal='center', vertical='center')
 
 
 def finalize_orders_sheet(ws):
@@ -71,6 +85,7 @@ def finalize_orders_sheet(ws):
         '플랫폼': 8,
         '주문일시': 16,
         '총 상품결제금액': 14,
+        '체크': 6,
         '수취인 이름': 20,
         '상품명 + 옵션명': 70,
         '수량': 10,
@@ -89,10 +104,13 @@ def finalize_orders_sheet(ws):
             vlen = visual_len(cell.value)
             if vlen > max_len:
                 max_len = vlen
-            if header == '상품명 + 옵션명' and vlen > 50:
+
+            # 🔹 상품명 + 옵션명 / 배송메세지 둘 다 긴 경우 줄바꿈 허용
+            if header in ('상품명 + 옵션명', '배송메세지') and vlen > 50:
                 cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
             else:
                 cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
+
             if header == '등록옵션명':
                 cell.number_format = '@'
 
@@ -102,9 +120,17 @@ def finalize_orders_sheet(ws):
         target_width = max(auto_width, min_widths.get(header, 12))
         ws.column_dimensions[col_letter].width = target_width
 
+    # 상품명+옵션명 열 인덱스: 6열(F)
+    # 배송메세지 열 인덱스: 10열(J)
     for r in range(2, ws.max_row + 1):
-        prod_cell = ws.cell(row=r, column=5)
+        prod_cell = ws.cell(row=r, column=6)
+        memo_cell = ws.cell(row=r, column=10)
+
         pclen = visual_len(prod_cell.value)
+        mlen = visual_len(memo_cell.value)
+
+        # 두 컬럼 중 더 긴 쪽 기준으로 높이 결정
+        base_len = max(pclen, mlen)
 
         rd = ws.row_dimensions[r]
 
@@ -112,11 +138,31 @@ def finalize_orders_sheet(ws):
         if rd.height is not None:
             continue
 
-        # 높이가 아직 없는 행만 기본 규칙 적용
-        if pclen > 40:
+        if base_len > 40:
             rd.height = 34
         else:
             rd.height = 24
+
+    # 🔹 체크 열(D열에 값이 있고, F열이 '+ '로 시작하지 않는 = 부모행만 색상 변경)
+    last_row = ws.max_row
+    if last_row >= 2:
+        fill_checked = PatternFill(
+            start_color="FFE6FFCC",
+            end_color="FFE6FFCC",
+            fill_type="solid"
+        )
+
+        # AND(
+        #   LEN($D2)>0,          → 체크 열에 뭔가 들어있고
+        #   LEFT($F2,2)<>" + "   → F열이 "+ " 로 시작하지 않음 = 자식행이 아님
+        # )
+        rule = FormulaRule(
+            formula=['AND(LEN($D2)>0, LEFT($F2,2)<>" + ")'],
+            fill=fill_checked
+        )
+
+        # A2 ~ J{마지막 행}까지 적용 → 실제로는 부모행만 색이 들어감
+        ws.conditional_formatting.add(f"A2:J{last_row}", rule)
 
 
 def append_coupang_block(ws, coupang_orders):
@@ -168,29 +214,31 @@ def append_coupang_block(ws, coupang_orders):
         # 🔹 쿠팡 배송메세지: parcelPrintMessage
         coupang_memo = od.get('parcelPrintMessage', '') or ''
 
+        # A:플랫폼, B:주문일시, C:총금액, D:체크(빈칸), E:수취인, F:상품+옵션, G:수량, H:전화, I:등록옵션명, J:배송메세지
         ws.append([
             "쿠팡",
             ordered_at,
             total_price_str,
+            "",                # 체크 열(사용자가 나중에 수동으로 ☑ 등 입력)
             receiver_name,
             product_info,
             total_qty,
             phone,
             option_name_str,
-            coupang_memo,   # ← 9번째 열: 배송메세지
+            coupang_memo,
         ])
         current_row += 1
 
-        # 🔹 border/굵은 라인 범위도 1~9열로 확장
-        apply_border_block(ws, block_start, current_row - 1, 1, 9)
+        # 테두리/굵은 라인 범위 1~10열로 확장
+        apply_border_block(ws, block_start, current_row - 1, 1, 10)
         merge_receiver_name(ws, block_start, current_row - 1)
-        apply_thick_bottom(ws, block_start, current_row - 1, 1, 9)
+        apply_thick_bottom(ws, block_start, current_row - 1, 1, 10)
 
 
 def append_godo_sets(ws, grouped_orders):
     """
     고도몰 주문을 엑셀 주문내역 시트에 추가.
-    - 부모행(본상품)의 '상품명 + 옵션명' 셀(5열)에:
+    - 부모행(본상품)의 '상품명 + 옵션명' 셀(6열)에:
         상품명
         orderoptionInfo
       이렇게 줄바꿈해서 표시.
@@ -249,10 +297,12 @@ def append_godo_sets(ws, grouped_orders):
 
             order_memo = grp.get("orderMemo", "") or grp.get("orderInfo", {}).get("orderMemo", "")
 
+            # A:플랫폼, B:주문일시, C:총금액, D:체크, E:수취인, F:상품+옵션, G:수량, H:전화, I:등록옵션명, J:배송메세지
             ws.append([
                 "고도몰",
                 grp["orderedAt"] if first_parent else "",
                 total_price_str,
+                "",   # 체크 열(사용자 수동 입력용)
                 grp["receiver"]["name"] if first_parent else "",
                 product_info_parent,
                 (qty or 1),
@@ -263,9 +313,9 @@ def append_godo_sets(ws, grouped_orders):
             current_row += 1
             first_parent = False
 
-            # 부모 셀 스타일링
+            # 부모 셀 스타일링 (상품명+옵션명: 6열)
             prow = current_row - 1
-            pcell = ws.cell(row=prow, column=5)
+            pcell = ws.cell(row=prow, column=6)
 
             if option_info and RICH_TEXT_AVAILABLE:
                 pcell.value = CellRichText(
@@ -296,16 +346,17 @@ def append_godo_sets(ws, grouped_orders):
             for add in s["children"]:
                 add_name = (add.get('goodsNm') or add.get('goodsNmStandard') or '').strip()
                 add_qty  = _to_int(add.get('goodsCnt', 1), 1)
-                ws.append(["", "", "", "", f"+ {add_name}", add_qty, "", "", ""])
+                # A~J 열 구조에 맞춰서 한 칸씩 밀어줌
+                ws.append(["", "", "", "", "", f"+ {add_name}", add_qty, "", "", ""])
                 current_row += 1
                 crow = current_row - 1
-                ccell = ws.cell(row=crow, column=5)
+                ccell = ws.cell(row=crow, column=6)
                 ccell.font = Font(italic=True, color="00666666")
                 ccell.alignment = Alignment(horizontal='left', vertical='center', indent=1)
 
-        apply_border_block(ws, block_start, current_row - 1, 1, 9)
+        apply_border_block(ws, block_start, current_row - 1, 1, 10)
         merge_receiver_name(ws, block_start, current_row - 1)
-        apply_thick_bottom(ws, block_start, current_row - 1, 1, 9)
+        apply_thick_bottom(ws, block_start, current_row - 1, 1, 10)
 
 
 def create_waybill_workbook(coupang_orders):
