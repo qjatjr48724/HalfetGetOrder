@@ -16,6 +16,7 @@ REM PyInstaller 빌드
 pyinstaller ^
   --onefile ^
   --name HalfetGetOrder ^
+  --icon=icon/app.ico ^
   entry.py
 
 REM 가상환경 비활성화
