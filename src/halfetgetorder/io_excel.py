@@ -251,6 +251,80 @@ def load_godo_add_goods_map(path: str | None = None) -> dict:
 
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+    
+
+def load_godo_goods_map(path: str | None = None) -> dict:
+    """
+    goods_search로 미리 만들어둔 godo_goods_all.json 로드.
+    key: goodsNo
+    value: goods_search 응답 전체(dict)
+    """
+    if path is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
+        path = os.path.join(project_root, "godo_goods_all.json")
+
+    if not os.path.exists(path):
+        print("⚠️ godo_goods_all.json 파일을 찾을 수 없습니다. 기본 RAM/SSD는 비워둡니다.")
+        return {}
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+    
+
+# ─────────────────────────────────────────────────────────
+# shortDescription에서 기본 RAM/SSD 뽑는 함수 추가
+# ─────────────────────────────────────────────────────────
+def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tuple[str, str]:
+    """
+    - 우선 parent(주문의 본상품) 안에 shortDescription 이 있으면 그걸 쓰고,
+    - 없으면 godo_goods_all.json(goods_map)에서 goodsNo 로 찾아서 shortDescription을 가져온다.
+
+    shortDescription 예시:
+      DeLL Latitude 5501 / Intel® Core™ i7-9850H / NVIDIA GeForce MX150 /
+      NVMe SSD 512G / DDR4 32G / FHD 1920×1080 해상도 (15.6인치) / 윈도우11
+
+    / 로 split 한 후:
+      0: 모델명
+      1: CPU
+      2: 그래픽
+      3: SSD
+      4: RAM
+      5: 해상도
+      6: 윈도우 버전
+
+    여기서
+      - 기본 SSD  → parts[3]
+      - 기본 RAM  → parts[4]
+    를 사용한다.
+    """
+    # 1) 주문 데이터에 바로 shortDescription 이 들어있으면 우선 사용
+    short_desc = (parent.get("shortDescription") or parent.get("short_desc") or "").strip()
+
+    # 2) 없으면 goodsNo로 godo_goods_all.json 에서 찾아본다
+    goods_no = str(parent.get("goodsNo") or "").strip()
+    if not short_desc and goods_no and goods_map:
+        goods_info = goods_map.get(goods_no)
+        if isinstance(goods_info, dict):
+            short_desc = (goods_info.get("shortDescription") or
+                          goods_info.get("short_desc") or "").strip()
+
+    if not short_desc:
+        return "", ""
+
+    parts = [p.strip() for p in short_desc.split("/")]
+
+    # 최소한 SSD(3), RAM(4) 까지는 있어야 한다
+    if len(parts) <= 4:
+        return "", ""
+
+    ssd_part = parts[3].strip()
+    ram_part = parts[4].strip()
+
+    # (RAM, SSD) 순서대로 반환
+    return ram_part, ssd_part
+
+
 
 
 def extract_specs_from_godo_children_using_map(children: list, add_goods_map: dict):
@@ -503,6 +577,10 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
         print("⚠️ godo_add_goods_all.json 파일을 찾을 수 없습니다. (고도몰 라벨에는 추가옵션 매핑이 반영되지 않습니다.)")
         add_goods_map = {}
 
+    # 고도몰 상품 전체 정보(기본 shortDescription 등) 로드
+    goods_map = load_godo_goods_map()
+
+
     # 쿠팡 키스킨 모델 리스트 (원하면 json으로 분리해도 됨)
     keyskin_models = [
         "그램 17",
@@ -545,7 +623,7 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
             )
 
             ws.append([
-                "쿠팡",
+                "쿠",
                 receiver_name,
                 model_name,
                 ram,
@@ -565,18 +643,28 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
             model_name = (parent.get("goodsCd") or "").strip()
 
-            ram, ssd, option_str = extract_specs_from_godo_children_using_map(
+            # 1) shortDescription 기준 기본 RAM/SSD 추출
+            base_ram, base_ssd = get_base_specs_from_short_description(parent, goods_map)
+
+            # 2) 추가옵션 기준 업그레이드 RAM/SSD / 옵션 추출
+            child_ram, child_ssd, option_str = extract_specs_from_godo_children_using_map(
                 children, add_goods_map
             )
 
+            # 3) 최종 RAM/SSD: 업그레이드 있으면 그 값, 없으면 기본값
+            final_ram = child_ram or base_ram
+            final_ssd = child_ssd or base_ssd
+
             ws.append([
-                "고도몰",
+                "자",
                 receiver_name,
                 model_name,
-                ram,
-                ssd,
+                final_ram,
+                final_ssd,
                 option_str,
             ])
+
+
 
     # 기본 정렬 & 열 너비 세팅
     for row in ws.iter_rows(min_row=2):
