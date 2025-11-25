@@ -5,9 +5,11 @@ from . import godo, coupang
 from .io_excel import (
     create_orders_sheet, finalize_orders_sheet,
     append_coupang_block, append_godo_sets,
-    create_waybill_workbook,   # ← 이 줄 추가
+    create_waybill_workbook,
+    create_label_workbook,
 )
 
+today = date.today().strftime("%Y%m%d")
 
 def _is_rental_order(od):
     """
@@ -113,7 +115,6 @@ def main():
     append_godo_sets(ws2, grouped)
     finalize_orders_sheet(ws2)
 
-    today = date.today().strftime("%Y%m%d")
     order_xlsx = os.path.join(DATA_DIR, f"주문수집_{today}.xlsx")
     wb2.save(order_xlsx)
     print(f"✅ 엑셀 저장 완료: {order_xlsx}")
@@ -133,6 +134,27 @@ def main():
         print(f"✅ 엑셀 저장 완료: {waybill_xlsx}")
     else:
         print("ℹ️ 쿠팡 주문이 없어 대한통운 송장등록 파일은 생성하지 않습니다.")
+
+
+
+    # 1) 라벨 워크북 생성
+    label_wb, _ = create_label_workbook(
+        coupang_orders=filtered_orders,      # 쿠팡 주문 원본 리스트
+        godo_grouped_orders=grouped,            # 고도몰 grouped_orders 리스트
+        godo_add_goods_map_path=os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),  # 프로젝트 루트
+            "godo_add_goods_all.json",
+        ),
+    )
+
+    # 2) 저장 경로: C:\Users\UserK\Desktop\data\라벨_YYYYMMDD.xlsx
+    os.makedirs(DATA_DIR, exist_ok=True)
+    label_path = os.path.join(DATA_DIR, f"라벨출력_{today}.xlsx")
+    label_wb.save(label_path)
+
+    print(f"✅ 라벨 엑셀 저장 완료: {label_path}")
+
+        
 
 
 if __name__ == "__main__":

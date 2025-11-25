@@ -235,6 +235,124 @@ def append_coupang_block(ws, coupang_orders):
         apply_thick_bottom(ws, block_start, current_row - 1, 1, 10)
 
 
+# ─────────────────────────────────────────────────────────
+# 고도몰 추가상품 가져오는 코드(추가상품 json 파일이 없을때만 생성하도록 돌아감)
+# ─────────────────────────────────────────────────────────
+def load_godo_add_goods_map(path: str | None = None) -> dict:
+    if path is None:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
+        path = os.path.join(project_root, "godo_add_goods_all.json")
+
+    if not os.path.exists(path):
+        print("⚠️ godo_add_goods_all.json 이 없어 처음 한 번 생성합니다...")
+        from . import build_godo_add_goods_all
+        build_godo_add_goods_all.main()
+
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def extract_specs_from_godo_children_using_map(children: list, add_goods_map: dict):
+    """
+    고도몰 '추가상품(children)' 리스트와 godo_add_goods_all.json을 사용해
+    RAM / SSD / 옵션 문자열을 추출.
+
+    godo_add_goods_all.json 구조:
+    {
+      "1000000015": { "name": "고급 노트북 가방 구매", "summary": "OPT:가방" },
+      "1000000078": { "name": "용량 256G→NVMe SSD 1TB로 UP↑", "summary": "SSD:1TB" },
+      ...
+    }
+    """
+    ram = None
+    ssd = None
+    options: list[str] = []
+    missing_ids = set()
+
+    for add in children:
+        add_no = str(add.get("addGoodsNo") or "").strip()
+        if not add_no:
+            continue
+
+        entry = add_goods_map.get(add_no)
+        if not entry:
+            # 매핑표에 없는 추가옵션 번호
+            missing_ids.add(add_no)
+            continue
+
+        summary = (entry.get("summary") or "").strip()
+        if not summary:
+            # summary(요약이름 B)를 아직 안 채운 경우
+            missing_ids.add(add_no)
+            continue
+
+        # prefix 기반 파싱: "RAM:16G", "SSD:1TB", "OPT:원키" ...
+        prefix, sep, value = summary.partition(":")
+        prefix = prefix.strip().upper()
+        value = value.strip() if sep else summary  # 콜론 없으면 전체를 value로
+
+        if prefix == "RAM" and value:
+            ram = value
+        elif prefix == "SSD" and value:
+            ssd = value
+        else:
+            # OPT:..., 혹은 prefix 없는 경우 모두 옵션으로 취급
+            if value:
+                options.append(value)
+
+    if missing_ids:
+        print(f"[라벨] 매핑되지 않은 추가옵션 번호: {', '.join(sorted(missing_ids))}")
+
+    # 옵션 중복 제거 + 정렬
+    options = sorted(set(options))
+    option_str = " / ".join(options) if options else ""
+
+    return ram or "", ssd or "", option_str
+
+
+
+# ─────────────────────────────────────────────────────────
+# 쿠팡 추가상품 가져오는 코드
+# ─────────────────────────────────────────────────────────
+def extract_specs_from_coupang_item(item: dict, keyskin_models: list[str] | None = None):
+    """
+    쿠팡 orderItems[*]에서 RAM / SSD / 옵션 추출.
+    - RAM: sellerProductItemName.split()[3]
+    - SSD: sellerProductItemName.split()[2]
+    - 옵션: [리브레, 원키] + (모델명에 키워드 포함되면 키스킨)
+    """
+    seller_item_name = item.get("sellerProductItemName") or ""
+    tokens = seller_item_name.split()
+
+    ram = ""
+    ssd = ""
+
+    if len(tokens) > 3:
+        ram = tokens[3]
+    if len(tokens) > 2:
+        ssd = tokens[2]
+
+    # 옵션 기본값
+    options = ["리브레", "원키"]
+
+    # 모델명 기반 키스킨 추가
+    if keyskin_models:
+        model_name = (
+            item.get("sellerProductName")
+            or item.get("vendorItemName")
+            or item.get("productName")
+            or ""
+        )
+        for kw in keyskin_models:
+            if kw and kw in model_name:
+                options.append("키스킨")
+                break
+
+    option_str = " / ".join(options)
+    return ram, ssd, option_str
+
+
 def append_godo_sets(ws, grouped_orders):
     """
     고도몰 주문을 엑셀 주문내역 시트에 추가.
@@ -357,6 +475,128 @@ def append_godo_sets(ws, grouped_orders):
         apply_border_block(ws, block_start, current_row - 1, 1, 10)
         merge_receiver_name(ws, block_start, current_row - 1)
         apply_thick_bottom(ws, block_start, current_row - 1, 1, 10)
+
+
+
+
+
+# ─────────────────────────────────────────────────────────
+# 라벨 출력 전용 엑셀파일 만드는 코드
+# ─────────────────────────────────────────────────────────
+def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
+                          godo_add_goods_map_path: str | None = None):
+    """
+    라벨 출력용 엑셀 워크북 생성.
+
+    헤더:
+      플랫폼 / 이름 / 모델명 / 램 / SSD / 옵션
+
+    - coupang_orders: 쿠팡 원본 주문 리스트
+      (append_coupang_block 에 쓰던 형태의 raw 데이터)
+    - godo_grouped_orders: 고도몰 grouped_orders
+      (append_godo_sets 에 쓰던 grp 리스트)
+    """
+    # 고도몰 추가상품 매핑 로드
+    try:
+        add_goods_map = load_godo_add_goods_map(godo_add_goods_map_path)
+    except FileNotFoundError:
+        print("⚠️ godo_add_goods_all.json 파일을 찾을 수 없습니다. (고도몰 라벨에는 추가옵션 매핑이 반영되지 않습니다.)")
+        add_goods_map = {}
+
+    # 쿠팡 키스킨 모델 리스트 (원하면 json으로 분리해도 됨)
+    keyskin_models = [
+        "그램 17",
+        "Latitude 5520",
+        "키스킨 포함",
+        "키보드 키스킨",
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "라벨"
+
+    # 헤더
+    headers = ["플랫폼", "이름", "모델명", "램", "SSD", "옵션"]
+    ws.append(headers)
+    for cell in ws[1]:
+        cell.fill = PatternFill(start_color="D8E4BC", end_color="D8E4BC", fill_type="solid")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    # ─────────────────────────────────────────
+    # 1) 쿠팡 라벨
+    # ─────────────────────────────────────────
+    for od in coupang_orders:
+        receiver_name = (
+            (od.get("shippingAddress") or {}).get("name", "")
+            or (od.get("receiver") or {}).get("name", "")
+        )
+
+        for item in od.get("orderItems", []):
+            model_name = (
+                item.get("sellerProductName")
+                or item.get("vendorItemName")
+                or item.get("productName")
+                or ""
+            )
+
+            ram, ssd, option_str = extract_specs_from_coupang_item(
+                item,
+                keyskin_models=keyskin_models,
+            )
+
+            ws.append([
+                "쿠팡",
+                receiver_name,
+                model_name,
+                ram,
+                ssd,
+                option_str,
+            ])
+
+    # ─────────────────────────────────────────
+    # 2) 고도몰 라벨
+    # ─────────────────────────────────────────
+    for grp in godo_grouped_orders:
+        receiver_name = grp.get("receiver", {}).get("name", "")
+
+        for s in grp.get("sets", []):
+            parent = s.get("parent", {})
+            children = s.get("children", []) or []
+
+            model_name = (parent.get("goodsCd") or "").strip()
+
+            ram, ssd, option_str = extract_specs_from_godo_children_using_map(
+                children, add_goods_map
+            )
+
+            ws.append([
+                "고도몰",
+                receiver_name,
+                model_name,
+                ram,
+                ssd,
+                option_str,
+            ])
+
+    # 기본 정렬 & 열 너비 세팅
+    for row in ws.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    width_map = {
+        "A": 10,  # 플랫폼
+        "B": 18,  # 이름
+        "C": 45,  # 모델명
+        "D": 10,  # 램
+        "E": 10,  # SSD
+        "F": 30,  # 옵션
+    }
+    for col, w in width_map.items():
+        ws.column_dimensions[col].width = w
+
+    ws.sheet_view.zoomScale = 90
+
+    return wb, ws
 
 
 def create_waybill_workbook(coupang_orders):
