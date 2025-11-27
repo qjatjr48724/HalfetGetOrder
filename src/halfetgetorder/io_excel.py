@@ -252,6 +252,168 @@ def load_godo_add_goods_map(path: str | None = None) -> dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
     
+def _parse_short_desc_to_specs(short_desc: str) -> tuple[str, str]:
+    """
+    shortDescription 예시:
+      'DeLL Latitude 5501 / Intel® Core™ i7-9850H / NVIDIA GeForce MX150 / NVMe SSD 512G / DDR4 32G / FHD ... / 윈도우11'
+
+    - '/' 로 나눈 뒤
+      index 3 → SSD 파트 (예: 'NVMe SSD 512G')
+      index 4 → RAM 파트 (예: 'DDR4 32G')
+    - 각 파트를 마지막 토큰만 쓰지 않고, **있는 그대로** 반환한다.
+    """
+    if not short_desc:
+        return "", ""
+
+    parts = [p.strip() for p in str(short_desc).split("/") if p.strip()]
+
+    # SSD: 3번째(인덱스 3)
+    ssd = parts[3].strip() if len(parts) > 3 else ""
+    # RAM: 4번째(인덱스 4)
+    ram = parts[4].strip() if len(parts) > 4 else ""
+
+    # (RAM, SSD) 순서로 반환
+    return ram, ssd
+
+
+
+def _build_base_specs_from_raw(raw) -> dict:
+    """
+    raw 를 {상품번호: {ram, ssd}} 형태로 정규화.
+    지원 형태:
+      1) 딕셔너리:
+         {
+           "1000001": { "ram": "16G", "ssd": "512G" }
+           "1000002": { "shortDescription": "..." }
+           "1000003": "DeLL Latitude 5501 / ... / NVMe SSD 512G / DDR4 32G / ..."
+         }
+
+      2) 리스트:
+         [
+           { "goodsNo": "1000001", "ram": "16G", "ssd": "512G" },
+           { "goodsNo": "1000002", "shortDescription": "..." },
+           { "goodsCd": "NB-5501", "shortDescription": "..." },
+           ...
+         ]
+    """
+    base_specs: dict[str, dict[str, str]] = {}
+
+    # case 1: dict
+    if isinstance(raw, dict):
+        for key, val in raw.items():
+            goods_key = str(key).strip()
+            if not goods_key:
+                continue
+
+            ram = ""
+            ssd = ""
+
+            if isinstance(val, dict):
+                ram = str(val.get("ram", "")).strip()
+                ssd = str(val.get("ssd", "")).strip()
+                short_desc = str(val.get("shortDescription", "")).strip()
+
+                # ram/ssd 없으면 shortDescription에서 뽑기
+                if short_desc and (not ram or not ssd):
+                    ram2, ssd2 = _parse_short_desc_to_specs(short_desc)
+                    ram = ram or ram2
+                    ssd = ssd or ssd2
+            else:
+                # 값이 그냥 shortDescription 문자열인 경우
+                short_desc = str(val).strip()
+                if short_desc:
+                    ram, ssd = _parse_short_desc_to_specs(short_desc)
+
+            base_specs[goods_key] = {"ram": ram, "ssd": ssd}
+
+    # case 2: list
+    elif isinstance(raw, list):
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+
+            goods_key = str(
+                row.get("goodsNo") or row.get("goodsCd") or ""
+            ).strip()
+            if not goods_key:
+                continue
+
+            ram = str(row.get("ram", "")).strip()
+            ssd = str(row.get("ssd", "")).strip()
+            short_desc = str(row.get("shortDescription", "")).strip()
+
+            if short_desc and (not ram or not ssd):
+                ram2, ssd2 = _parse_short_desc_to_specs(short_desc)
+                ram = ram or ram2
+                ssd = ssd or ssd2
+
+            base_specs[goods_key] = {"ram": ram, "ssd": ssd}
+
+    return base_specs
+
+
+def load_godo_base_specs_map(path: str | None = None) -> dict:
+    """
+    고도몰 상품 기본 RAM/SSD 사양 로드.
+
+    우선순위:
+      1) 인자로 받은 path
+      2) 프로젝트 루트의 godo_base_specs.json
+      3) 프로젝트 루트의 godo_goods_all.json (goods_search 결과 전체)
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
+
+    candidates: list[str] = []
+    if path:
+        candidates.append(path)
+    candidates.append(os.path.join(project_root, "godo_base_specs.json"))
+    candidates.append(os.path.join(project_root, "godo_goods_all.json"))
+
+    for p in candidates:
+        if not p:
+            continue
+        if not os.path.exists(p):
+            continue
+
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            specs = _build_base_specs_from_raw(raw)
+        except Exception as e:
+            print(f"⚠️ 기본 사양 파일({p})을 읽는 중 오류: {e}")
+            continue
+
+        if specs:
+            print(f"[라벨] 고도몰 기본 RAM/SSD 사양 {len(specs)}건 로드 ({p})")
+            return specs
+
+    print("⚠️ godo_base_specs.json / godo_goods_all.json 을 찾지 못했습니다. 고도몰 라벨의 RAM/SSD는 비워둡니다.")
+    return {}
+
+
+def get_godo_base_ram_ssd(parent: dict, base_specs_map: dict) -> tuple[str, str]:
+    """
+    고도몰 parent(본상품) 한 건에 대해 기본 RAM/SSD 를 조회.
+    - 우선 goodsNo 로 찾고
+    - 없으면 goodsCd 로도 한 번 더 찾아본다.
+    """
+    goods_no = str(parent.get("goodsNo") or "").strip()
+    goods_cd = str(parent.get("goodsCd") or "").strip()
+
+    spec = None
+    if goods_no:
+        spec = base_specs_map.get(goods_no)
+    if spec is None and goods_cd:
+        spec = base_specs_map.get(goods_cd)
+
+    if not spec:
+        return "", ""
+
+    ram = str(spec.get("ram", "")).strip()
+    ssd = str(spec.get("ssd", "")).strip()
+    return ram, ssd
+    
 
 def load_godo_goods_map(path: str | None = None) -> dict:
     """
@@ -296,7 +458,7 @@ def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tupl
     여기서
       - 기본 SSD  → parts[3]
       - 기본 RAM  → parts[4]
-    를 사용한다.
+    를 **그대로** 사용한다.
     """
     # 1) 주문 데이터에 바로 shortDescription 이 들어있으면 우선 사용
     short_desc = (parent.get("shortDescription") or parent.get("short_desc") or "").strip()
@@ -304,10 +466,21 @@ def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tupl
     # 2) 없으면 goodsNo로 godo_goods_all.json 에서 찾아본다
     goods_no = str(parent.get("goodsNo") or "").strip()
     if not short_desc and goods_no and goods_map:
-        goods_info = goods_map.get(goods_no)
-        if isinstance(goods_info, dict):
-            short_desc = (goods_info.get("shortDescription") or
-                          goods_info.get("short_desc") or "").strip()
+        if isinstance(goods_map, dict):
+            goods_info = goods_map.get(goods_no)
+            if isinstance(goods_info, dict):
+                short_desc = (goods_info.get("shortDescription") or
+                              goods_info.get("short_desc") or "").strip()
+        elif isinstance(goods_map, list):
+            # goods_map 이 리스트인 경우 (goods_search 결과를 그대로 저장한 형태)
+            for row in goods_map:
+                if not isinstance(row, dict):
+                    continue
+                key = str(row.get("goodsNo") or row.get("goodsCd") or "").strip()
+                if key == goods_no:
+                    short_desc = (row.get("shortDescription") or
+                                  row.get("short_desc") or "").strip()
+                    break
 
     if not short_desc:
         return "", ""
@@ -323,6 +496,7 @@ def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tupl
 
     # (RAM, SSD) 순서대로 반환
     return ram_part, ssd_part
+
 
 
 
@@ -577,8 +751,17 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
         print("⚠️ godo_add_goods_all.json 파일을 찾을 수 없습니다. (고도몰 라벨에는 추가옵션 매핑이 반영되지 않습니다.)")
         add_goods_map = {}
 
-    # 고도몰 상품 전체 정보(기본 shortDescription 등) 로드
-    goods_map = load_godo_goods_map()
+    # 🔹 고도몰 기본 RAM/SSD 사양 로드 (shortDescription 기반)
+    base_specs_map = load_godo_base_specs_map()
+    missing_base_spec_ids: set[str] = set()
+
+    # 🔹 shortDescription fallback 용 전체 상품 정보 (goods_search 결과)
+    try:
+        godo_goods_map = load_godo_goods_map()
+    except Exception as e:
+        print(f"⚠️ godo_goods_all.json 로드 중 오류: {e}")
+        godo_goods_map = {}
+
 
 
     # 쿠팡 키스킨 모델 리스트 (원하면 json으로 분리해도 됨)
@@ -643,26 +826,38 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
             model_name = (parent.get("goodsCd") or "").strip()
 
-            # 1) shortDescription 기준 기본 RAM/SSD 추출
-            base_ram, base_ssd = get_base_specs_from_short_description(parent, goods_map)
+            # 1) 기본 RAM/SSD: 우선 base_specs_map 사용
+            base_ram, base_ssd = get_godo_base_ram_ssd(parent, base_specs_map)
 
-            # 2) 추가옵션 기준 업그레이드 RAM/SSD / 옵션 추출
-            child_ram, child_ssd, option_str = extract_specs_from_godo_children_using_map(
+            # 1-1) 부족하면 shortDescription 을 직접 파싱해서 보완
+            if (not base_ram or not base_ssd) and godo_goods_map:
+                ram2, ssd2 = get_base_specs_from_short_description(parent, godo_goods_map)
+                base_ram = base_ram or ram2
+                base_ssd = base_ssd or ssd2
+
+            if not (base_ram or base_ssd):
+                # 디버깅용: 어떤 상품이 비어있는지 확인
+                goods_no = str(parent.get("goodsNo") or "").strip()
+                key = goods_no or model_name
+                if key:
+                    missing_base_spec_ids.add(key)
+
+            # 2) 추가옵션은 그대로 옵션 문자열만 뽑기
+            _, _, option_str = extract_specs_from_godo_children_using_map(
                 children, add_goods_map
             )
 
-            # 3) 최종 RAM/SSD: 업그레이드 있으면 그 값, 없으면 기본값
-            final_ram = child_ram or base_ram
-            final_ssd = child_ssd or base_ssd
 
             ws.append([
-                "자",
+                "고도몰",
                 receiver_name,
                 model_name,
-                final_ram,
-                final_ssd,
+                base_ram,
+                base_ssd,
                 option_str,
             ])
+
+
 
 
 
@@ -683,6 +878,13 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
         ws.column_dimensions[col].width = w
 
     ws.sheet_view.zoomScale = 90
+
+    # 기본 사양 맵은 있는데도 매칭이 안 된 상품들 로그
+    if base_specs_map and missing_base_spec_ids:
+        print(
+            "[라벨] RAM/SSD 기본사양을 찾지 못한 고도몰 상품번호/코드: "
+            + ", ".join(sorted(missing_base_spec_ids))
+        )
 
     return wb, ws
 
