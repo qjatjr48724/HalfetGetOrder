@@ -461,7 +461,7 @@ def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tupl
     를 **그대로** 사용한다.
     """
     # 1) 주문 데이터에 바로 shortDescription 이 들어있으면 우선 사용
-    short_desc = (parent.get("shortDescription") or parent.get("short_desc") or "").strip()
+    short_desc = (parent.get("shortDescription") or "").strip()
 
     # 2) 없으면 goodsNo로 godo_goods_all.json 에서 찾아본다
     goods_no = str(parent.get("goodsNo") or "").strip()
@@ -849,7 +849,7 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
 
             ws.append([
-                "고도몰",
+                "자",
                 receiver_name,
                 model_name,
                 base_ram,

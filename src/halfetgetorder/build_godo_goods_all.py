@@ -106,10 +106,10 @@ def fetch_all_goods(size: int = 200) -> list:
             all_items.extend(items)
             print(f"[INFO] 이번 페이지 {len(items)}건, 누적 {len(all_items)}건")
 
-            # size보다 적게 오면 마지막 페이지라고 보고 종료
-            if len(items) < size:
-                print("[INFO] 마지막 페이지로 판단.")
-                break
+            # # size보다 적게 오면 마지막 페이지라고 보고 종료
+            # if len(items) < size:
+            #     print("[INFO] 마지막 페이지로 판단.")
+            #     break
 
             page += 1
 
