@@ -36,33 +36,31 @@ HalfetGetOrder
 ### 수정 파일 트리
 ```
 HalfetGetOrder
+├─ build.bat
 ├─ data
-│  ├─ ~$주문수집_20251117.xlsx
-│  ├─ 대한통운 송장등록_20251117.xlsx
-│  ├─ 주문수집_20251114.xlsx
-│  └─ 주문수집_20251117.xlsx
-├─ godo_add_goods_cache.json
+├─ entry.py
+├─ godo_add_goods_all.json
+├─ godo_goods_all.json
+├─ icon
+│  └─ app.ico
 ├─ README.md
 ├─ requirements.txt
-├─ src
-│  └─ halfetgetorder
-│     ├─ app.py
-│     ├─ config.py
-│     ├─ coupang.py
-│     ├─ godo.py
-│     ├─ io_excel.py
-│     ├─ keys.py
-│     ├─ resources
-│     │  └─ godo_add_goods.json
-│     ├─ utils.py
-│     ├─ __init__.py
-│     └─ __main__.py
-└─ test
-   ├─ godo_orders.json
-   ├─ Goods_Add_Search.py
-   ├─ HalfetGetOrder (1).py
-   ├─ HalfetGetOrder.py
-   └─ makedict.py
+└─ src
+   └─ halfetgetorder
+      ├─ app.py
+      ├─ build_godo_add_goods_all.py
+      ├─ build_godo_goods_all.py
+      ├─ config.py
+      ├─ coupang.py
+      ├─ godo.py
+      ├─ godo_save_orders.py
+      ├─ io_excel.py
+      ├─ keys.py
+      ├─ resources
+      │  └─ godo_add_goods.json
+      ├─ utils.py
+      ├─ __init__.py
+      └─ __main__.py
 
 ```
 

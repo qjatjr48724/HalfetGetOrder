@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import openpyxl
 from datetime import date
@@ -13,6 +14,26 @@ header_fill = PatternFill(start_color="D8E4BC", end_color="D8E4BC", fill_type="s
 center = Alignment(horizontal='center', vertical='center', wrap_text=False)
 thin = Side(style="thin", color="000000")
 thick = Side(style="thick", color="000000")
+
+def get_project_root() -> str:
+    """
+    프로젝트 루트 경로를 반환.
+
+    - 소스에서 실행할 때:
+        io_excel.py 기준으로 ../../ 올라간 폴더 (HalfetGetOrder)
+    - PyInstaller exe로 실행할 때:
+        exe가 위치한 폴더 (dist) 기준
+    """
+    # PyInstaller로 빌드된 실행 파일 여부
+    if getattr(sys, "frozen", False):
+        # exe가 있는 폴더
+        exe_dir = os.path.dirname(sys.executable)
+        return exe_dir
+
+    # 일반 파이썬 실행일 때 (python -m halfetgetorder)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(base_dir, "..", ".."))
+
 
 # ─────────────────────────────────────────────────────────
 # Rich Text(한 셀 안에 서로 다른 스타일) 지원 여부 체크
@@ -239,18 +260,84 @@ def append_coupang_block(ws, coupang_orders):
 # 고도몰 추가상품 가져오는 코드(추가상품 json 파일이 없을때만 생성하도록 돌아감)
 # ─────────────────────────────────────────────────────────
 def load_godo_add_goods_map(path: str | None = None) -> dict:
-    if path is None:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
-        path = os.path.join(project_root, "godo_add_goods_all.json")
+    """
+    godo_add_goods_all.json 로드.
 
-    if not os.path.exists(path):
+    - 기본 위치: 프로젝트 루트(get_project_root()) 바로 아래.
+      (소스 실행시: HalfetGetOrder/, exe 실행시: HalfetGetOrder.exe 가 있는 폴더)
+
+    - 파일이 없으면:
+        * 개발(소스) 실행: build_godo_add_goods_all.main() 을 한 번 호출하여 자동 생성 시도
+        * exe 실행(PyInstaller): 자동 생성하지 않고, 경고만 출력 후 빈 dict 반환
+    """
+    project_root = get_project_root()
+    default_path = os.path.join(project_root, "godo_add_goods_all.json")
+
+    # 1) 인자로 path가 들어온 경우 처리
+    if path:
+        # 상대경로면 프로젝트 루트 기준으로
+        if not os.path.isabs(path):
+            candidate = os.path.join(project_root, path)
+        else:
+            candidate = path
+
+        # 실제 파일이 있으면 그걸 사용
+        if os.path.exists(candidate):
+            resolved_path = candidate
+        else:
+            # 없으면 기본 경로로
+            resolved_path = default_path
+    else:
+        resolved_path = default_path
+
+    # 2) 최종 경로에 파일이 없을 때
+    if not os.path.exists(resolved_path):
+        # exe 환경에서는 자동 생성 X
+        if getattr(sys, "frozen", False):
+            print(
+                "⚠️ godo_add_goods_all.json 파일을 찾을 수 없습니다.\n"
+                "   exe 환경에서는 자동 생성하지 않고, "
+                "추가옵션 매핑 없이 계속 진행합니다."
+            )
+            return {}
+
+        # 개발(소스) 환경일 때만 자동 생성
         print("⚠️ godo_add_goods_all.json 이 없어 처음 한 번 생성합니다...")
-        from . import build_godo_add_goods_all
-        build_godo_add_goods_all.main()
+        try:
+            from . import build_godo_add_goods_all
+        except ImportError:
+            print(
+                "⚠️ build_godo_add_goods_all 모듈을 찾을 수 없습니다. "
+                "추가옵션 매핑 없이 계속 진행합니다."
+            )
+            return {}
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        try:
+            build_godo_add_goods_all.main()
+        except Exception as e:
+            print(f"⚠️ godo_add_goods_all.json 생성 중 오류: {e}")
+            return {}
+
+        # main()이 default_path에 저장했을 가능성이 높으므로 다시 확인
+        if (not os.path.exists(resolved_path)) and os.path.exists(default_path):
+            resolved_path = default_path
+
+        if not os.path.exists(resolved_path):
+            print(
+                "⚠️ godo_add_goods_all.json 을 생성했지만, 파일을 찾지 못했습니다.\n"
+                "   추가옵션 매핑 없이 계속 진행합니다."
+            )
+            return {}
+
+    # 3) 최종 경로에서 로드
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"⚠️ godo_add_goods_all.json 로드 중 오류: {e}")
+        return {}
+
+    return data
     
 def _parse_short_desc_to_specs(short_desc: str) -> tuple[str, str]:
     """
@@ -361,8 +448,7 @@ def load_godo_base_specs_map(path: str | None = None) -> dict:
       2) 프로젝트 루트의 godo_base_specs.json
       3) 프로젝트 루트의 godo_goods_all.json (goods_search 결과 전체)
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
+    project_root = get_project_root()
 
     candidates: list[str] = []
     if path:
@@ -422,8 +508,7 @@ def load_godo_goods_map(path: str | None = None) -> dict:
     value: goods_search 응답 전체(dict)
     """
     if path is None:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.abspath(os.path.join(base_dir, "..", ".."))
+        project_root = get_project_root()
         path = os.path.join(project_root, "godo_goods_all.json")
 
     if not os.path.exists(path):
