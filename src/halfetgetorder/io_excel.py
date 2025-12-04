@@ -838,16 +838,11 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
     # 🔹 고도몰 기본 RAM/SSD 사양 로드 (shortDescription 기반)
     base_specs_map = load_godo_base_specs_map()
+
+    # ✅ 고도몰 전체 상품 정보 로드 (shortDescription 직접 파싱에 사용)
+    godo_goods_map = load_godo_goods_map()
+
     missing_base_spec_ids: set[str] = set()
-
-    # 🔹 shortDescription fallback 용 전체 상품 정보 (goods_search 결과)
-    try:
-        godo_goods_map = load_godo_goods_map()
-    except Exception as e:
-        print(f"⚠️ godo_goods_all.json 로드 중 오류: {e}")
-        godo_goods_map = {}
-
-
 
     # 쿠팡 키스킨 모델 리스트 (원하면 json으로 분리해도 됨)
     keyskin_models = [
@@ -869,7 +864,7 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # ─────────────────────────────────────────
-    # 1) 쿠팡 라벨
+    # 1) 쿠팡 라벨  (▶ 수량만큼 행 반복)
     # ─────────────────────────────────────────
     for od in coupang_orders:
         receiver_name = (
@@ -890,19 +885,29 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
                 keyskin_models=keyskin_models,
             )
 
-            ws.append([
-                "쿠",
-                receiver_name,
-                model_name,
-                ram,
-                ssd,
-                option_str,
-            ])
+            # 🔹 쿠팡 수량: shippingCount (없으면 1)
+            qty = _to_int(item.get("shippingCount") or item.get("orderQuantity") or 1, 1)
+            if qty <= 0:
+                qty = 1
+
+            # ▶ 수량만큼 동일 행 반복 추가
+            for _ in range(qty):
+                ws.append([
+                    "쿠",
+                    receiver_name,
+                    model_name,
+                    ram,
+                    ssd,
+                    option_str,
+                ])
 
     # ─────────────────────────────────────────
     # 2) 고도몰 라벨
+    #   - 주문수집 엑셀과 동일하게 optionInfo를 파싱해서
+    #     모델명 셀에 "모델명 / optionInfo" 형태로 붙여준다.
+    #   - 라벨에서는 자사몰 주문 정렬만 역순(오래된 주문이 위로)으로 변경
     # ─────────────────────────────────────────
-    for grp in godo_grouped_orders:
+    for grp in reversed(godo_grouped_orders or []):
         receiver_name = grp.get("receiver", {}).get("name", "")
 
         for s in grp.get("sets", []):
@@ -927,23 +932,45 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
                 if key:
                     missing_base_spec_ids.add(key)
 
-            # 2) 추가옵션은 그대로 옵션 문자열만 뽑기
+            # 2) 부모 상품의 optionInfo → "옵션명: 값" 문자열로 뽑기
+            #    (주문수집 엑셀 append_godo_sets() 와 로직을 맞춰줌)
+            option_info = (parent.get('orderoptionInfo') or parent.get('orderOptionInfo') or '').strip()
+
+            if not option_info:
+                raw_opt = (parent.get('optionInfo') or '').strip()
+                if raw_opt:
+                    try:
+                        opt_list = json.loads(raw_opt)  # [[옵션명, 옵션값, ...], [...], ...]
+                        parts = []
+                        for opt in opt_list:
+                            if isinstance(opt, (list, tuple)) and len(opt) >= 2:
+                                name = str(opt[0]).strip()
+                                val = str(opt[1]).strip()
+                                if name and val:
+                                    parts.append(f"{name}: {val}")
+                        # 라벨에서는 줄바꿈 대신 " / "로 한 줄에 붙여줌
+                        option_info = " / ".join(parts)
+                    except Exception:
+                        option_info = ""
+
+            # 3) 모델명 셀에 "모델명 / optionInfo" 형태로 넣기
+            model_cell_value = model_name
+            if option_info:
+                model_cell_value = f"{model_name}\n{option_info}"
+
+            # 4) 추가옵션(가방, 원키 등)은 기존처럼 옵션 열에만 표시
             _, _, option_str = extract_specs_from_godo_children_using_map(
                 children, add_goods_map
             )
 
-
             ws.append([
-                "자",
-                receiver_name,
-                model_name,
-                base_ram,
-                base_ssd,
-                option_str,
+                "자",               # 플랫폼
+                receiver_name,      # 이름
+                model_cell_value,   # 모델명 + optionInfo
+                base_ram,           # 램
+                base_ssd,           # SSD
+                option_str,         # 옵션(추가상품 요약)
             ])
-
-
-
 
 
     # 기본 정렬 & 열 너비 세팅
