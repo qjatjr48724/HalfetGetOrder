@@ -816,8 +816,11 @@ def append_godo_sets(ws, grouped_orders):
 # ─────────────────────────────────────────────────────────
 # 라벨 출력 전용 엑셀파일 만드는 코드
 # ─────────────────────────────────────────────────────────
-def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
-                          godo_add_goods_map_path: str | None = None):
+def create_label_workbook(
+    coupang_orders: list,
+    godo_grouped_orders: list,
+    godo_add_goods_map_path: str | None = None,
+):
     """
     라벨 출력용 엑셀 워크북 생성.
 
@@ -825,9 +828,7 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
       플랫폼 / 이름 / 모델명 / 램 / SSD / 옵션
 
     - coupang_orders: 쿠팡 원본 주문 리스트
-      (append_coupang_block 에 쓰던 형태의 raw 데이터)
-    - godo_grouped_orders: 고도몰 grouped_orders
-      (append_godo_sets 에 쓰던 grp 리스트)
+    - godo_grouped_orders: 고도몰 grouped_orders 리스트
     """
     # 고도몰 추가상품 매핑 로드
     try:
@@ -838,11 +839,14 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
     # 🔹 고도몰 기본 RAM/SSD 사양 로드 (shortDescription 기반)
     base_specs_map = load_godo_base_specs_map()
-
-    # ✅ 고도몰 전체 상품 정보 로드 (shortDescription 직접 파싱에 사용)
-    godo_goods_map = load_godo_goods_map()
-
     missing_base_spec_ids: set[str] = set()
+
+    # 🔹 shortDescription fallback 용 전체 상품 정보 (goods_search 결과)
+    try:
+        godo_goods_map = load_godo_goods_map()
+    except Exception as e:
+        print(f"⚠️ godo_goods_all.json 로드 중 오류: {e}")
+        godo_goods_map = {}
 
     # 쿠팡 키스킨 모델 리스트 (원하면 json으로 분리해도 됨)
     keyskin_models = [
@@ -860,11 +864,13 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
     headers = ["플랫폼", "이름", "모델명", "램", "SSD", "옵션"]
     ws.append(headers)
     for cell in ws[1]:
-        cell.fill = PatternFill(start_color="D8E4BC", end_color="D8E4BC", fill_type="solid")
+        cell.fill = PatternFill(
+            start_color="D8E4BC", end_color="D8E4BC", fill_type="solid"
+        )
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # ─────────────────────────────────────────
-    # 1) 쿠팡 라벨  (▶ 수량만큼 행 반복)
+    # 1) 쿠팡 라벨
     # ─────────────────────────────────────────
     for od in coupang_orders:
         receiver_name = (
@@ -885,27 +891,28 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
                 keyskin_models=keyskin_models,
             )
 
-            # 🔹 쿠팡 수량: shippingCount (없으면 1)
-            qty = _to_int(item.get("shippingCount") or item.get("orderQuantity") or 1, 1)
+            # 👉 shippingCount(수량) 만큼 같은 행을 반복해서 추가
+            qty = _to_int(item.get("shippingCount", 1), 1)
             if qty <= 0:
                 qty = 1
 
-            # ▶ 수량만큼 동일 행 반복 추가
             for _ in range(qty):
-                ws.append([
-                    "쿠",
-                    receiver_name,
-                    model_name,
-                    ram,
-                    ssd,
-                    option_str,
-                ])
+                ws.append(
+                    [
+                        "쿠",           # 플랫폼
+                        receiver_name, # 이름
+                        model_name,    # 모델명
+                        ram,
+                        ssd,
+                        option_str,    # 옵션
+                    ]
+                )
 
     # ─────────────────────────────────────────
     # 2) 고도몰 라벨
-    #   - 주문수집 엑셀과 동일하게 optionInfo를 파싱해서
-    #     모델명 셀에 "모델명 / optionInfo" 형태로 붙여준다.
-    #   - 라벨에서는 자사몰 주문 정렬만 역순(오래된 주문이 위로)으로 변경
+    #   - 자사몰 주문은 역순(최근 주문이 아래로)
+    #   - goodsCnt(수량) 만큼 행 반복
+    #   - 모델명 셀: "모델명\noptionInfo"
     # ─────────────────────────────────────────
     for grp in reversed(godo_grouped_orders or []):
         receiver_name = grp.get("receiver", {}).get("name", "")
@@ -921,69 +928,93 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
 
             # 1-1) 부족하면 shortDescription 을 직접 파싱해서 보완
             if (not base_ram or not base_ssd) and godo_goods_map:
-                ram2, ssd2 = get_base_specs_from_short_description(parent, godo_goods_map)
-                base_ram = base_ram or ram2
-                base_ssd = base_ssd or ssd2
+                try:
+                    ram2, ssd2 = get_base_specs_from_short_description(
+                        parent, godo_goods_map
+                    )
+                    base_ram = base_ram or ram2
+                    base_ssd = base_ssd or ssd2
+                except Exception:
+                    pass
 
             if not (base_ram or base_ssd):
-                # 디버깅용: 어떤 상품이 비어있는지 확인
                 goods_no = str(parent.get("goodsNo") or "").strip()
                 key = goods_no or model_name
                 if key:
                     missing_base_spec_ids.add(key)
 
-            # 2) 부모 상품의 optionInfo → "옵션명: 값" 문자열로 뽑기
-            #    (주문수집 엑셀 append_godo_sets() 와 로직을 맞춰줌)
-            option_info = (parent.get('orderoptionInfo') or parent.get('orderOptionInfo') or '').strip()
+            # 2) 부모 상품의 optionInfo 문자열 만들기
+            #    - orderoptionInfo / orderOptionInfo 에 사람이 읽기 좋은 포맷이 있으면 그걸 우선 사용
+            #    - 없으면 optionInfo(JSON) 파싱해서 "옵션명: 옵션값 / ..." 형태로 생성
+            option_info = (
+                (parent.get("orderoptionInfo") or "").strip()
+                or (parent.get("orderOptionInfo") or "").strip()
+            )
 
             if not option_info:
-                raw_opt = (parent.get('optionInfo') or '').strip()
+                raw_opt = (parent.get("optionInfo") or "").strip()
                 if raw_opt:
                     try:
-                        opt_list = json.loads(raw_opt)  # [[옵션명, 옵션값, ...], [...], ...]
-                        parts = []
+                        opt_list = json.loads(raw_opt)  # [[옵션명, 옵션값, ...], ...]
+                        parts: list[str] = []
                         for opt in opt_list:
                             if isinstance(opt, (list, tuple)) and len(opt) >= 2:
                                 name = str(opt[0]).strip()
                                 val = str(opt[1]).strip()
                                 if name and val:
                                     parts.append(f"{name}: {val}")
-                        # 라벨에서는 줄바꿈 대신 " / "로 한 줄에 붙여줌
                         option_info = " / ".join(parts)
                     except Exception:
                         option_info = ""
 
-            # 3) 모델명 셀에 "모델명 / optionInfo" 형태로 넣기
+            # 3) 모델명 셀 값: "모델명" 또는 "모델명\noptionInfo"
             model_cell_value = model_name
             if option_info:
                 model_cell_value = f"{model_name}\n{option_info}"
 
-            # 4) 추가옵션(가방, 원키 등)은 기존처럼 옵션 열에만 표시
+            # 4) 추가옵션(가방/원키/복구 등)은 옵션열(F)로
             _, _, option_str = extract_specs_from_godo_children_using_map(
                 children, add_goods_map
             )
 
-            ws.append([
-                "자",               # 플랫폼
-                receiver_name,      # 이름
-                model_cell_value,   # 모델명 + optionInfo
-                base_ram,           # 램
-                base_ssd,           # SSD
-                option_str,         # 옵션(추가상품 요약)
-            ])
+            # 5) 본상품 수량(goodsCnt) 만큼 행을 반복해서 추가
+            qty = _to_int(parent.get("goodsCnt", 1), 1)
+            if qty <= 0:
+                qty = 1
 
+            for _ in range(qty):
+                ws.append(
+                    [
+                        "자",               # 플랫폼(자사몰)
+                        receiver_name,      # 이름
+                        model_cell_value,   # 모델명 + optionInfo(줄바꿈)
+                        base_ram,           # 램
+                        base_ssd,           # SSD
+                        option_str,         # 옵션(추가상품 요약)
+                    ]
+                )
 
-    # 기본 정렬 & 열 너비 세팅
+    # 정렬 & 열 너비 세팅
     for row in ws.iter_rows(min_row=2):
         for cell in row:
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+            if cell.column_letter == "C":  # 모델명 열은 줄바꿈 허용
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+            else:
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                )
 
     width_map = {
         "A": 10,  # 플랫폼
         "B": 18,  # 이름
-        "C": 45,  # 모델명
-        "D": 10,  # 램
-        "E": 10,  # SSD
+        "C": 45,  # 모델명(+옵션)
+        "D": 12,  # 램
+        "E": 12,  # SSD
         "F": 30,  # 옵션
     }
     for col, w in width_map.items():
@@ -999,6 +1030,8 @@ def create_label_workbook(coupang_orders: list, godo_grouped_orders: list,
         )
 
     return wb, ws
+
+
 
 
 def create_waybill_workbook(coupang_orders):
