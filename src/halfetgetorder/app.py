@@ -3,13 +3,13 @@ from datetime import date, datetime
 from .config import DATA_DIR
 from . import godo, coupang
 from .io_excel import (
-    create_orders_sheet, finalize_orders_sheet,
-    append_coupang_block, append_godo_sets,
+    create_orders_workbook,   # ✅ 주문수집 엑셀 한 번에 만드는 헬퍼
     create_waybill_workbook,
     create_label_workbook,
 )
 
 today = date.today().strftime("%Y%m%d")
+
 
 def _is_rental_order(od):
     """
@@ -64,7 +64,7 @@ def main():
         # 방어용: 여기서 문제가 나도 프로그램 전체는 계속 돌도록
         print("⚠️ 실행 간격 확인 중 오류가 발생했지만, 프로그램은 계속 진행합니다:", e)
 
-    # 1) 주문 데이터 조회
+    # 1) 주문 데이터 조회 (API 직접 호출)
     cp_body = coupang.fetch_orders()
     godo_json = godo.fetch_orders()
     grouped = godo.group_sets(godo_json)
@@ -76,10 +76,7 @@ def main():
     except Exception as e:
         print("⚠️ 마지막 실행 시각 저장 실패:", e)
 
-    # 2) 주문수집 엑셀 생성 (쿠팡 + 고도몰)
-    wb2, ws2 = create_orders_sheet()
-
-    # 쿠팡 주문 파싱 및 렌탈 주문 제외
+    # 2) 쿠팡 주문 파싱 및 렌탈 주문 제외
     resp_json = {}
     filtered_orders = []
     filtered_cp_body = ""
@@ -90,7 +87,7 @@ def main():
 
         # 🔽 렌탈/대여/임대 주문 제외
         filtered_orders = [od for od in orders if not _is_rental_order(od)]
-        # 🔼 필터링된 주문만 엑셀에 사용
+        # 🔼 필터링된 주문만 엑셀/송장/라벨에 사용
 
         # 필터링된 주문만 포함하는 JSON 문자열을 만들어서
         # 대한통운 송장용 normalize_coupang_orders 에도 동일하게 적용
@@ -105,24 +102,32 @@ def main():
 
         filtered_cp_body = json.dumps(resp_json_filtered, ensure_ascii=False)
 
-        # 주문수집 시트에 쿠팡 블록 추가 (렌탈 제외)
-        append_coupang_block(ws2, filtered_orders)
-
     except Exception as e:
         print("⚠️ 쿠팡 JSON 파싱 또는 필터링 오류:", e)
+        # 오류가 나도 이후 로직이 돌아가도록, cp_body 그대로 사용
+        filtered_cp_body = cp_body or ""
 
-    # 고도몰 주문 세트 추가
-    append_godo_sets(ws2, grouped)
-    finalize_orders_sheet(ws2)
-
-    order_xlsx = os.path.join(DATA_DIR, f"주문수집_{today}.xlsx")
-    wb2.save(order_xlsx)
-    print(f"✅ 엑셀 저장 완료: {order_xlsx}")
+    # 2-1) 주문수집 엑셀 생성 (쿠팡 + 고도몰)
+    try:
+        # 👉 여기서 네가 말해준 create_orders_workbook 사용
+        wb_orders, ws_orders = create_orders_workbook(
+            coupang_orders=filtered_orders,
+            godo_grouped_orders=grouped,
+        )
+        order_xlsx = os.path.join(DATA_DIR, f"주문수집_{today}.xlsx")
+        wb_orders.save(order_xlsx)
+        print(f"✅ 엑셀 저장 완료: {order_xlsx}")
+    except Exception as e:
+        print("⚠️ 주문수집 엑셀 생성 중 오류:", e)
 
     # 3) 대한통운 송장등록 엑셀 생성 (쿠팡 주문만, 렌탈 제외된 상태)
     try:
         # 쿠팡 송장용 정규화도 필터된 cp_body 기준으로 수행
-        norm_cp_orders = coupang.normalize_coupang_orders(filtered_cp_body) if filtered_cp_body else []
+        norm_cp_orders = (
+            coupang.normalize_coupang_orders(filtered_cp_body)
+            if filtered_cp_body
+            else []
+        )
     except Exception as e:
         print("⚠️ 쿠팡 송장용 정규화 오류:", e)
         norm_cp_orders = []
@@ -135,26 +140,22 @@ def main():
     else:
         print("ℹ️ 쿠팡 주문이 없어 대한통운 송장등록 파일은 생성하지 않습니다.")
 
-
-
-    # 1) 라벨 워크북 생성
+    # 4) 라벨 워크북 생성
     label_wb, _ = create_label_workbook(
-        coupang_orders=filtered_orders,      # 쿠팡 주문 원본 리스트
-        godo_grouped_orders=grouped,            # 고도몰 grouped_orders 리스트
+        coupang_orders=filtered_orders,      # 쿠팡 주문 리스트(렌탈 제외)
+        godo_grouped_orders=grouped,         # 고도몰 grouped_orders 리스트
         godo_add_goods_map_path=os.path.join(
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),  # 프로젝트 루트
             "godo_add_goods_all.json",
         ),
     )
 
-    # 2) 저장 경로: C:\Users\UserK\Desktop\data\라벨_YYYYMMDD.xlsx
+    # 5) 라벨 엑셀 저장 경로: C:\Users\UserK\Desktop\data\라벨출력_YYYYMMDD.xlsx
     os.makedirs(DATA_DIR, exist_ok=True)
     label_path = os.path.join(DATA_DIR, f"라벨출력_{today}.xlsx")
     label_wb.save(label_path)
 
     print(f"✅ 라벨 엑셀 저장 완료: {label_path}")
-
-        
 
 
 if __name__ == "__main__":
