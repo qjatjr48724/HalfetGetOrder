@@ -697,7 +697,7 @@ def append_godo_sets(ws, grouped_orders):
       orderoptionInfo는 회색+기울임(가능하면).
     """
     current_row = ws.max_row + 1
-    for grp in grouped_orders:
+    for grp in reversed(grouped_orders):
         block_start = current_row
         first_parent = True
 
