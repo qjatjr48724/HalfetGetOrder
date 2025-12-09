@@ -120,3 +120,94 @@ def group_sets(godo_json):
         })
 
     return results
+
+
+def fetch_goods_base_specs(goods_no: str) -> tuple[str, str]:
+    """
+    Goods_Search API를 직접 호출해서 기본 RAM/SSD를 가져온다.
+
+    json 캐시(godo_goods_all.json, godo_base_specs.json)를 전혀 사용하지 않고
+    goodsNo 한 건당 API 한 번만 호출해서 (ram, ssd)를 반환한다.
+    """
+    goods_no = str(goods_no or "").strip()
+    if not goods_no:
+        return "", ""
+
+    url = "https://openhub.godo.co.kr/godomall5/goods/Goods_Search.php"
+    params = {
+        "partner_key": PARTNER_KEY,
+        "key": GODO_KEY,
+        "goodsNo": goods_no,
+        "page": 1,
+        "size": 1,
+    }
+
+    try:
+        resp = requests.get(url, params=params, timeout=30)
+    except Exception as e:
+        print(f"⚠️ Goods_Search 호출 실패(goodsNo={goods_no}): {e}")
+        return "", ""
+
+    # 인코딩 처리 (기존 build_godo_goods_all.py 와 동일 패턴)
+    ctype = (resp.headers.get("Content-Type") or "").lower()
+    if "euc-kr" in ctype or "cp949" in ctype:
+        resp.encoding = "cp949"
+    elif not resp.encoding:
+        resp.encoding = "utf-8"
+
+    text = (resp.text or "").strip()
+    if not text.startswith("<"):
+        print("⚠️ Goods_Search 응답이 XML 형식이 아닙니다 (앞 200자):")
+        print(text[:200])
+        return "", ""
+
+    try:
+        data = xmltodict.parse(text)
+    except Exception as e:
+        print(f"⚠️ Goods_Search XML 파싱 오류(goodsNo={goods_no}): {e}")
+        return "", ""
+
+    # data 전체 구조에서 goodsNo 가진 dict들만 모으기
+    items: list[dict] = []
+
+    def _walk(node):
+        if isinstance(node, dict):
+            if "goodsNo" in node:
+                items.append(node)
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for it in node:
+                _walk(it)
+
+    _walk(data)
+
+    if not items:
+        return "", ""
+
+    # goodsNo 일치하는 애 우선
+    target = None
+    for it in items:
+        gno = str(it.get("goodsNo") or "").strip()
+        if gno == goods_no:
+            target = it
+            break
+    if target is None:
+        target = items[0]
+
+    short_desc = (
+        target.get("shortDescription")
+        or target.get("short_desc")
+        or ""
+    ).strip()
+
+    if not short_desc:
+        return "", ""
+
+    parts = [p.strip() for p in short_desc.split("/")]
+    if len(parts) <= 4:
+        return "", ""
+
+    ssd_part = parts[3].strip()
+    ram_part = parts[4].strip()
+    return ram_part, ssd_part

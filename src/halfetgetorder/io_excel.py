@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import openpyxl
+from .godo import fetch_goods_base_specs
 from datetime import date
 from openpyxl.styles import PatternFill, Alignment, Font, Border, Side
 from openpyxl.utils import get_column_letter
@@ -417,7 +418,10 @@ def load_godo_base_specs_map(path: str | None = None) -> dict:
     우선순위:
       1) 인자로 받은 path
       2) 프로젝트 루트의 godo_base_specs.json
-      3) 프로젝트 루트의 godo_goods_all.json (goods_search 결과 전체)
+
+    예전에는 godo_goods_all.json(상품 전체 캐시)을 함께 사용했지만,
+    이제는 대용량 JSON 파일을 만들지 않고
+    필요한 경우 Goods_Search API를 직접 호출하는 방식으로 변경했다.
     """
     project_root = get_project_root()
 
@@ -425,7 +429,6 @@ def load_godo_base_specs_map(path: str | None = None) -> dict:
     if path:
         candidates.append(path)
     candidates.append(os.path.join(project_root, "godo_base_specs.json"))
-    candidates.append(os.path.join(project_root, "godo_goods_all.json"))
 
     for p in candidates:
         if not p:
@@ -445,8 +448,9 @@ def load_godo_base_specs_map(path: str | None = None) -> dict:
             print(f"[라벨] 고도몰 기본 RAM/SSD 사양 {len(specs)}건 로드 ({p})")
             return specs
 
-    print("⚠️ godo_base_specs.json / godo_goods_all.json 을 찾지 못했습니다. 고도몰 라벨의 RAM/SSD는 비워둡니다.")
+    print("ℹ️ godo_base_specs.json 을 찾지 못했습니다. 고도몰 기본 RAM/SSD는 API에서 보완 조회합니다.")
     return {}
+
 
 
 def get_godo_base_ram_ssd(parent: dict, base_specs_map: dict) -> tuple[str, str]:
@@ -472,22 +476,25 @@ def get_godo_base_ram_ssd(parent: dict, base_specs_map: dict) -> tuple[str, str]
     return ram, ssd
 
 
+
+### 이제 사용하지 않는 함수
 def load_godo_goods_map(path: str | None = None) -> dict:
     """
     goods_search로 미리 만들어둔 godo_goods_all.json 로드.
     key: goodsNo
     value: goods_search 응답 전체(dict)
     """
-    if path is None:
-        project_root = get_project_root()
-        path = os.path.join(project_root, "godo_goods_all.json")
+    # if path is None:
+    #     project_root = get_project_root()
+    #     path = os.path.join(project_root, "godo_goods_all.json")
 
-    if not os.path.exists(path):
-        print("⚠️ godo_goods_all.json 파일을 찾을 수 없습니다. 기본 RAM/SSD는 비워둡니다.")
-        return {}
+    # if not os.path.exists(path):
+    #     print("⚠️ godo_goods_all.json 파일을 찾을 수 없습니다. 기본 RAM/SSD는 비워둡니다.")
+    #     return {}
 
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    # with open(path, "r", encoding="utf-8") as f:
+    #     return json.load(f)
+    return {}
 
 
 def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tuple[str, str]:
@@ -516,23 +523,14 @@ def get_base_specs_from_short_description(parent: dict, goods_map: dict) -> tupl
     short_desc = (parent.get("shortDescription") or "").strip()
 
     goods_no = str(parent.get("goodsNo") or "").strip()
-    if not short_desc and goods_no and goods_map:
-        if isinstance(goods_map, dict):
-            goods_info = goods_map.get(goods_no)
-            if isinstance(goods_info, dict):
-                short_desc = (goods_info.get("shortDescription")
-                              or goods_info.get("short_desc")
-                              or "").strip()
-        elif isinstance(goods_map, list):
-            for row in goods_map:
-                if not isinstance(row, dict):
-                    continue
-                key = str(row.get("goodsNo") or row.get("goodsCd") or "").strip()
-                if key == goods_no:
-                    short_desc = (row.get("shortDescription")
-                                  or row.get("short_desc")
-                                  or "").strip()
-                    break
+
+    # parent 안에 shortDescription 이 없으면 API로 한 번 더 조회
+    if not short_desc and goods_no:
+        try:
+            short_desc = godo.fetch_goods_short_description(goods_no) or ""
+        except Exception as e:
+            print(f"⚠️ Goods_Search API에서 shortDescription 조회 실패 (goodsNo={goods_no}): {e}")
+            short_desc = ""
 
     if not short_desc:
         return "", ""
@@ -808,8 +806,6 @@ def create_label_workbook(
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
     # 고도몰 기본 사양/상품 정보 로드
-    base_specs_map: dict[str, dict] = load_godo_base_specs_map(godo_base_specs_path)
-    godo_goods_map: dict[str, dict] = load_godo_goods_map(godo_goods_all_path)
     missing_base_spec_ids: set[str] = set()
 
     # 1) 쿠팡 라벨
@@ -858,23 +854,11 @@ def create_label_workbook(
 
             model_name = (parent.get("goodsCd") or "").strip()
 
-            # 기본 RAM/SSD (1차: base_specs_map)
-            base_ram, base_ssd = get_godo_base_ram_ssd(parent, base_specs_map)
-
-            # 부족하면 shortDescription 보완
-            if (not base_ram or not base_ssd) and godo_goods_map:
-                try:
-                    ram2, ssd2 = get_base_specs_from_short_description(
-                        parent,
-                        godo_goods_map,
-                    )
-                    base_ram = base_ram or ram2
-                    base_ssd = base_ssd or ssd2
-                except Exception:
-                    pass
+            # ✅ 기본 RAM/SSD는 json 파일을 전혀 보지 않고, goodsNo 기준으로 API에서 바로 조회
+            goods_no = str(parent.get("goodsNo") or "").strip()
+            base_ram, base_ssd = fetch_goods_base_specs(goods_no)
 
             if not (base_ram or base_ssd):
-                goods_no = str(parent.get("goodsNo") or "").strip()
                 key = goods_no or model_name
                 if key:
                     missing_base_spec_ids.add(key)
@@ -951,7 +935,7 @@ def create_label_workbook(
 
     ws.sheet_view.zoomScale = 90
 
-    if base_specs_map and missing_base_spec_ids:
+    if missing_base_spec_ids:
         print(
             "[라벨] RAM/SSD 기본사양을 찾지 못한 고도몰 상품번호/코드: "
             + ", ".join(sorted(missing_base_spec_ids))
