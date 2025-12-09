@@ -42,7 +42,8 @@ def resource_path(rel: str) -> str:
 def app_data_dir() -> str:
     home = Path.home()
     desktop = home / "Desktop"
-    data = desktop / "data"
+    # 바탕화면에 이름 변경하려면 밑줄 수정하기
+    data = desktop / "하프전자 주문수집기"
     data.mkdir(parents=True, exist_ok=True)
     return str(data)
 
