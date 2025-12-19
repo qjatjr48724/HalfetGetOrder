@@ -1,6 +1,6 @@
 import os, json
 from datetime import date, datetime
-from .config import DATA_DIR
+from .config import DATA_DIR, configure_api_keys_interactive
 from . import godo, coupang
 from .io_excel import (
     create_orders_workbook,   # ✅ 주문수집 엑셀 한 번에 만드는 헬퍼
@@ -37,6 +37,11 @@ def _is_rental_order(od):
 
 
 def main():
+    # ─────────────────────────────────────────────
+    # 0. 실행 전에 API 키 확인/변경
+    # ─────────────────────────────────────────────
+    configure_api_keys_interactive()
+
     # ─────────────────────────────────────────────
     # 1. 실행 간격 제한 (예: 2분)
     # ─────────────────────────────────────────────
@@ -142,8 +147,8 @@ def main():
 
         
     print("=================================================================")
-    print("라벨출력 엑셀파일을 생성하는 중입니다...")
-    print("약 10~30초 정도 소요되니, 반응이 없다면 Enter키를 한번 눌러주세요.")
+    print("[INFO] 라벨출력 엑셀파일을 생성하는 중입니다...")
+    print("[INFO] 약 10~30초 정도 소요되니, 반응이 없다면 Enter키를 한번 눌러주세요.")
 
     # 4) 라벨 워크북 생성
     label_wb, _ = create_label_workbook(
