@@ -1,6 +1,6 @@
 import os, json
 from datetime import date, datetime
-from .config import DATA_DIR, configure_api_keys_interactive
+from .config import DATA_DIR
 from . import godo, coupang
 from .io_excel import (
     create_orders_workbook,   # ✅ 주문수집 엑셀 한 번에 만드는 헬퍼
@@ -37,11 +37,6 @@ def _is_rental_order(od):
 
 
 def main():
-    # ─────────────────────────────────────────────
-    # 0. 실행 전에 API 키 확인/변경
-    # ─────────────────────────────────────────────
-    configure_api_keys_interactive()
-
     # ─────────────────────────────────────────────
     # 1. 실행 간격 제한 (예: 2분)
     # ─────────────────────────────────────────────
