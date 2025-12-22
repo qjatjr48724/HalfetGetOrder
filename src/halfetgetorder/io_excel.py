@@ -197,6 +197,12 @@ def finalize_orders_sheet(ws):
         else:
             target_width = max(auto_width, min_widths.get(header, 12))
 
+        if header == '배송메세지':
+            # 이 열은 자동 계산 무시하고 항상 65로 고정
+            target_width = 35
+        else:
+            target_width = max(auto_width, min_widths.get(header, 12))
+
         ws.column_dimensions[col_letter].width = target_width
 
 
