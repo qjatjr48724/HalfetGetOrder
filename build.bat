@@ -2,6 +2,20 @@
 chcp 65001 >nul
 SETLOCAL
 
+REM 스크립트 기준 디렉터리로 이동
+cd /d "%~dp0"
+
+REM ─────────────────────────────────────────
+REM Python / PyInstaller 경로 설정 (venv 가 있으면 우선 사용)
+REM ─────────────────────────────────────────
+set "PYTHON_EXE=python"
+if exist "venv\Scripts\python.exe" (
+    set "PYTHON_EXE=venv\Scripts\python.exe"
+)
+
+REM pyinstaller.exe 대신 python -m pyinstaller 형식으로 사용
+set "PYINSTALLER_CMD=%PYTHON_EXE% -m PyInstaller"
+
 REM ─────────────────────────────────────────
 REM 메인 메뉴
 REM ─────────────────────────────────────────
@@ -22,7 +36,7 @@ echo   3. 최근 빌드된 exe 실행
 echo   4. 아무 것도 안 하고 종료
 echo ========================================
 set "MENU_CHOICE="
-set /p MENU_CHOICE=번호를 선택하세요 (1-4^) : 
+set /p MENU_CHOICE=번호를 선택하세요 ^(1-4^) : 
 
 if "%MENU_CHOICE%"=="1" goto BUILD
 if "%MENU_CHOICE%"=="2" goto CHANGE_KEYS
@@ -43,16 +57,13 @@ cls
 echo [INFO] API 키 변경을 시작합니다.
 echo.
 
-REM 스크립트 위치로 이동
-cd /d "%~dp0"
+REM Python 설치 여부 확인
+call :CHECK_PYTHON
 
-REM 가상환경 활성화 (venv 가정)
-call venv\Scripts\activate.bat
+echo 사용되는 Python: %PYTHON_EXE%
+echo.
 
-python update_keys.py
-
-REM 가상환경 비활성화 (실패해도 무시)
-deactivate 2>nul
+"%PYTHON_EXE%" update_keys.py
 
 echo.
 echo [INFO] API 키 변경 작업이 완료되었습니다.
@@ -69,8 +80,13 @@ cls
 echo [INFO] PyInstaller 빌드를 시작합니다.
 echo.
 
-REM 스크립트 위치
-cd /d "%~dp0"
+REM Python / PyInstaller 설치 여부 확인
+call :CHECK_PYTHON
+call :CHECK_PYINSTALLER
+
+echo 사용되는 Python     : %PYTHON_EXE%
+echo 사용되는 PyInstaller: %PYINSTALLER_CMD%
+echo.
 
 REM 오늘 날짜 생성 (파일명에 사용)
 for /f %%i in ('powershell -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set TODAY=%%i
@@ -83,9 +99,6 @@ echo TODAY        = %TODAY%
 echo INTERNAL_NAME= %INTERNAL_NAME%
 echo DISPLAY_NAME = %DISPLAY_NAME%
 echo.
-
-REM 가상환경 활성화
-call venv\Scripts\activate.bat
 
 REM 기존 빌드 파일 삭제
 rmdir /s /q build 2>nul
@@ -104,12 +117,13 @@ IF NOT EXIST "%ICON_PATH%" (
 )
 
 REM PyInstaller 빌드
-pyinstaller --onefile --name "%INTERNAL_NAME%" --icon="%ICON_PATH%" entry.py
+%PYINSTALLER_CMD% --onefile --name "%INTERNAL_NAME%" --icon="%ICON_PATH%" entry.py
 
 IF ERRORLEVEL 1 (
     echo.
     echo [ERROR] PyInstaller 빌드 중 오류가 발생했습니다.
     echo.
+    pause
     goto MENU
 )
 
@@ -127,6 +141,59 @@ IF EXIST "dist\%INTERNAL_NAME%.exe" (
 echo.
 pause
 goto MENU
+
+
+REM ─────────────────────────────────────────
+REM Python / PyInstaller 확인 서브루틴
+REM ─────────────────────────────────────────
+:CHECK_PYTHON
+"%PYTHON_EXE%" --version >nul 2>&1
+if not errorlevel 1 goto CP_OK
+
+echo.
+echo [ERROR] Python 이 설치되어 있지 않거나 PATH 에 등록되어 있지 않습니다.
+echo        먼저 Python 을 설치한 뒤 다시 시도해 주세요.
+echo.
+set /p OPENPY=Python 다운로드 페이지를 열까요? ^(Y/N, 엔터=아니오^) : 
+if /i "%OPENPY%"=="Y" (
+    start "" "https://www.python.org/downloads/"
+)
+echo.
+pause
+goto MENU
+
+:CP_OK
+goto :EOF
+
+
+:CHECK_PYINSTALLER
+"%PYTHON_EXE%" -m PyInstaller --version >nul 2>&1
+if not errorlevel 1 goto CPI_OK
+
+echo.
+echo [WARN] PyInstaller 가 설치되어 있지 않습니다.
+set /p INSTALL_PYI=PyInstaller 를 자동으로 설치할까요? ^(Y/N, 엔터=예^) : 
+if /i "%INSTALL_PYI%"=="N" (
+    echo.
+    echo PyInstaller 가 없으면 빌드를 진행할 수 없습니다.
+    echo        'pip install pyinstaller' 명령으로 수동 설치 후 다시 시도해 주세요.
+    echo.
+    pause
+    goto MENU
+)
+
+"%PYTHON_EXE%" -m pip install pyinstaller
+if errorlevel 1 (
+    echo.
+    echo [ERROR] PyInstaller 설치에 실패했습니다.
+    echo        'pip install pyinstaller' 명령으로 수동 설치 후 다시 시도해 주세요.
+    echo.
+    pause
+    goto MENU
+)
+
+:CPI_OK
+goto :EOF
 
 
 REM ─────────────────────────────────────────
@@ -163,7 +230,7 @@ IF NOT DEFINED LATEST_EXE (
 
 echo [INFO] 최근 빌드된 파일: dist\%LATEST_EXE%
 echo.
-set /p RUN_NOW=지금 이 파일을 실행할까요? (Y/N, 엔터=예) : 
+set /p RUN_NOW=지금 이 파일을 실행할까요? ^(Y/N, 엔터=예^) : 
 
 if /i "%RUN_NOW%"=="n" (
     echo.
@@ -177,7 +244,7 @@ echo.
 echo [INFO] 프로그램을 실행합니다...
 start "" "dist\%LATEST_EXE%"
 echo.
-echo 실행 요청을 보냈습니다. (이 창을 닫아도 프로그램은 별도 실행됩니다.)
+echo 실행 요청을 보냈습니다. ^(이 창을 닫아도 프로그램은 별도 실행됩니다.^)
 echo.
 pause
 goto MENU
