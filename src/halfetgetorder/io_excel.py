@@ -162,14 +162,12 @@ def finalize_orders_sheet(ws):
 
             # 줄바꿈 설정
             if header in ('등록옵션명', '배송메세지'):
-                # 등록옵션명 / 배송메세지는 항상 줄바꿈 허용
                 cell.alignment = Alignment(
                     horizontal='center',
                     vertical='center',
                     wrap_text=True
                 )
             elif header == '상품명 + 옵션명' and vlen > 50:
-                # 상품명+옵션명은 길이가 길 때만 줄바꿈
                 cell.alignment = Alignment(
                     horizontal='center',
                     vertical='center',
@@ -185,25 +183,23 @@ def finalize_orders_sheet(ws):
             if header == '등록옵션명':
                 cell.number_format = '@'
 
+        # ── 여기부터 열 너비 계산 로직 정리 ──
         auto_width = int(max_len * 0.5)
-
         if header == '등록옵션명':
             auto_width = int(max_len * 0.5) + 4
-        target_width = max(auto_width, min_widths.get(header, 12))
 
         if header == '상품명 + 옵션명':
-            # 이 열은 자동 계산 무시하고 항상 65로 고정
+            # 항상 65 고정
             target_width = 65
-        else:
-            target_width = max(auto_width, min_widths.get(header, 12))
-
-        if header == '배송메세지':
-            # 이 열은 자동 계산 무시하고 항상 65로 고정
+        elif header == '배송메세지':
+            # 항상 35 고정
             target_width = 35
         else:
             target_width = max(auto_width, min_widths.get(header, 12))
 
         ws.column_dimensions[col_letter].width = target_width
+
+
 
 
         # 상품명+옵션명 열(F), 배송메세지 열(I) 기준으로 행 높이 조정
